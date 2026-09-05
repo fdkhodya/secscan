@@ -5,12 +5,13 @@ package main
 //
 // Источники имён:
 //  1. TLS-сертификаты (SAN) по открытым https-портам;
-//  2. реестр Certificate Transparency (crt.sh) по «базовому» домену
-//     (отключается env SECSCAN_CRTSH=0) — публичный реестр сертификатов.
+//  2. реестры Certificate Transparency по «базовому» домену (отключаются
+//     env SECSCAN_CRTSH=0): основной — crt.sh (нестабилен, 2 попытки),
+//     резервный — certspotter API; публичные реестры сертификатов.
 //
 // Каждый кандидат обязан резолвиться в IP цели (A-запись), поэтому
-// посторонние имена отсекаются. Запросы к crt.sh — единственный внешний
-// вызов discovery.
+// посторонние имена отсекаются. Запросы к crt.sh/certspotter — единственные
+// внешние вызовы discovery.
 
 import (
 	"context"
@@ -20,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,8 @@ const (
 	// crtshTimeout — crt.sh бывает медленным; при ошибке discovery просто
 	// продолжает с тем, что нашёл по TLS-сертификатам.
 	crtshTimeout = 20 * time.Second
+	// certspotterTimeout — резервный CT-реестр (обычно отвечает быстрее).
+	certspotterTimeout = 15 * time.Second
 	// tlsProbeTimeout — на один порт при чтении сертификата.
 	tlsProbeTimeout = 4 * time.Second
 )
@@ -62,7 +66,7 @@ func discoverSiteNames(ctx context.Context, cfg *Config, job *Job, webPorts []in
 		}
 	}
 
-	// 2) crt.sh по базовому домену (введённый домен или домен из SAN)
+	// 2) реестры CT по базовому домену (введённый домен или домен из SAN)
 	if cfg.Crtsh {
 		base := ""
 		if ip := net.ParseIP(host); ip == nil {
@@ -71,7 +75,12 @@ func discoverSiteNames(ctx context.Context, cfg *Config, job *Job, webPorts []in
 			base = baseDomain(sortedKeys(names)[0])
 		}
 		if base != "" && base != host {
-			for _, n := range crtshNames(ctx, base) {
+			// crt.sh нестабилен (502) — резервный источник certspotter
+			ctNames := crtshNames(ctx, base)
+			if len(ctNames) == 0 {
+				ctNames = certspotterNames(ctx, base)
+			}
+			for _, n := range ctNames {
 				add(n)
 			}
 		}
@@ -149,7 +158,26 @@ func baseDomain(name string) string {
 }
 
 // crtshNames запрашивает сертификаты домена (и поддоменов) у crt.sh.
+// Сервис нестабилен (частые 502) — до 2 попыток с паузой.
 func crtshNames(ctx context.Context, domain string) []string {
+	const attempts = 2
+	for a := 0; a < attempts; a++ {
+		if a > 0 {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(2 * time.Second):
+			}
+		}
+		out := crtshFetch(ctx, domain)
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
+func crtshFetch(ctx context.Context, domain string) []string {
 	url := "https://crt.sh/?q=%25." + domain + "&output=json"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -172,6 +200,56 @@ func crtshNames(ctx context.Context, domain string) []string {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&entries); err != nil {
 		return nil
 	}
+	return ctNamesFrom(entries)
+}
+
+// certspotterNames — резервный CT-реестр (бесплатный API без ключа).
+func certspotterNames(ctx context.Context, domain string) []string {
+	u := "https://api.certspotter.com/v1/issuances?domain=" +
+		url.QueryEscape(domain) + "&include_subdomains=true&expand=dns_names"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("User-Agent", "secscan/1.0")
+	client := &http.Client{Timeout: certspotterTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	var entries []struct {
+		DNSNames []string `json:"dns_names"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&entries); err != nil {
+		return nil
+	}
+	names := map[string]bool{}
+	for _, e := range entries {
+		for _, v := range e.DNSNames {
+			v = strings.ToLower(strings.TrimSpace(v))
+			v = strings.TrimPrefix(v, "*.")
+			if v == "" || strings.ContainsAny(v, "* ") {
+				continue
+			}
+			names[v] = true
+		}
+	}
+	out := make([]string, 0, len(names))
+	for v := range names {
+		out = append(out, v)
+	}
+	return out
+}
+
+// ctNamesFrom собирает имена из ответа crt.sh.
+func ctNamesFrom(entries []struct {
+	CommonName string `json:"common_name"`
+	NameValue  string `json:"name_value"`
+}) []string {
 	set := map[string]bool{}
 	for _, e := range entries {
 		values := strings.Split(e.NameValue, "\n")

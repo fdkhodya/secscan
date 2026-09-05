@@ -21,7 +21,8 @@
 Если это URL — nmap сканирует хост, а ZAP/nuclei дополнительно проверяют
 веб-приложение. Для «голого» IP (или домена без схемы) secscan дополнительно
 находит другие сайты на этом же IP — по TLS-сертификатам (SAN) и через
-публичный реестр сертификатов crt.sh (отключается `SECSCAN_CRTSH=0`) — и за
+публичный реестр сертификатов crt.sh с резервом на certspotter API (оба
+отключаются `SECSCAN_CRTSH=0`) — и за
 один запуск проверяет каждый: IP по nmap, все найденные домены по http/https
 через ZAP/nuclei и testssl (например, ввели IP, а проверятся и
 `https://vault.fdkh.ru`, и `https://music.fdkh.ru`, и остальные, чьи A-записи
@@ -88,7 +89,7 @@
     store.go         — файловое хранилище задач и настроек
     engine.go        — очередь и исполнение скана (nmap → udp → zap → ssl → nuclei)
     scanners.go      — docker-обёртка, nmap TCP/UDP (XML), доп. NSE-скрипты
-    discovery.go     — поиск сайтов на IP цели (TLS SAN + crt.sh), списки целей
+    discovery.go     — поиск сайтов на IP цели (TLS SAN + crt.sh/certspotter), списки целей
     ssl.go           — TLS/SSL-анализ (testssl.sh, JSON)
     nuclei.go        — сигнатурный скан (nuclei, JSONL)
     zap_i18n.go      — русские переводы правил OWASP ZAP
