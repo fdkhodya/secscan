@@ -279,16 +279,31 @@ func zapScan(ctx context.Context, image, network, hostDataDir, jobID, targetURL 
 	if err := os.MkdirAll(workDir, 0o777); err != nil {
 		return nil, err
 	}
+	// Каталог создаёт root (secscan/docker), а zap-контейнер пишет от своего
+	// пользователя (uid 1000 zap) — открываем на запись всем, иначе
+	// zap-baseline падает: Permission denied: '/zap/wrk/zap.yaml'.
+	if err := os.Chmod(workDir, 0o777); err != nil {
+		return nil, err
+	}
 	reportJSON := filepath.Join(workDir, "zap.json")
 	_ = os.Remove(reportJSON)
 	mount := workDir + ":/zap/wrk"
 	args := []string{
 		"zap-baseline.py", "-t", targetURL,
-		"-J", "/zap/wrk/zap.json",
+		// Имя файла ОТНОСИТЕЛЬНОЕ: абсолютный путь (-J /zap/wrk/zap.json)
+		// ломает генерацию отчёта — automation-фреймворк склеивает reportDir
+		// с reportFile и пишет в /zap/wrk/zap/wrk/zap.json (NoSuchFileException).
+		// zap-baseline кладёт zap.json в /zap/wrk (смонтированный workDir).
+		"-J", "zap.json",
 	}
 	_, errOut, err := runDocker(ctx, image, network, []string{mount}, args)
 	if err != nil {
-		return nil, fmt.Errorf("zap: %v: %s", err, tail(errOut, 2000))
+		// zap-baseline: rc=0 — PASS, rc=1 — найдены FAIL, rc=2 — найдены WARN:
+		// штатные завершения, отчёт zap.json при этом создаётся. Ошибка —
+		// только если отчёта нет (rc=3+: ZAP не стартовал и т.п.).
+		if _, statErr := os.Stat(reportJSON); statErr != nil {
+			return nil, fmt.Errorf("zap: %v: %s", err, tail(errOut, 2000))
+		}
 	}
 	b, err := os.ReadFile(reportJSON)
 	if err != nil {

@@ -45,6 +45,13 @@ services:
       SECSCAN_GMP_PASS: ${SECSCAN_GMP_PASS:-}
     volumes:
       - ./data:/data
+      # Хостовый каталог данных дублируется в контейнер по пути
+      # SECSCAN_HOST_DATA: рабочие каталоги сканеров (data/work/<job>) secscan
+      # создаёт ИМЕННО там, а docker -v монтирует их в контейнеры nmap/ZAP по
+      # хостовому пути — пути должны совпадать (см. scanners.go, zapScan).
+      # При другом расположении проекта задайте SECSCAN_HOST_DATA в .env
+      # (абсолютный путь к ./data на хосте) — он подставится в оба места.
+      - ./data:${SECSCAN_HOST_DATA:-/opt/projects/secscan/data}
       - /var/run/docker.sock:/var/run/docker.sock
       # сокет gvmd (Greenbone): смонтирован, только когда стек запущен
       - gvmd_socket_vol:/run/gvmd:ro
