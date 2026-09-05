@@ -12,3 +12,6 @@ work/
 *.retry
 .idea/
 .vscode/
+
+# windows-бинарь не храним
+*.exe
