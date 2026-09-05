@@ -128,29 +128,43 @@ func (e *Engine) run(id string) {
 	}
 	sort.Ints(webPorts)
 
-	// 2) ZAP (если включён и есть куда сканировать)
-	zapDone := false
+	// 2) ZAP: проверяем цель и все найденные на её IP сайты
+	var urls []string
 	if j.ScanZap {
-		urls := zapTargets(j, webPorts)
+		urls = zapTargetList(ctx, e.cfg, j, webPorts)
 		if len(urls) > 0 {
-			e.set(j, "running", "zap: активное сканирование веб-приложения", "")
-			for _, u := range urls {
-				findings, err := zapScan(ctx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
+			e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(urls)), "")
+			okN, zapErrs := 0, []string{}
+			for i, u := range urls {
+				e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(urls), u), "")
+				// у каждого сайта собственный бюджет; общий ctx не даёт
+				// одному медленному сайту съесть время остальных
+				uCtx, cancel := context.WithTimeout(ctx, zapTargetTimeout)
+				findings, err := zapScan(uCtx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
+				cancel()
 				if err != nil {
-					msg := fmt.Sprintf("этап zap (%s): %v", u, err)
-					e.set(j, "running", "zap: ошибка", msg)
+					zapErrs = append(zapErrs, u+": "+firstLine(err.Error()))
 					continue
 				}
 				j.Findings = append(j.Findings, findings...)
-				zapDone = true
+				okN++
 				_ = e.store.SaveJob(j)
-				break // одного URL достаточно для baseline
+			}
+			msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
+			if len(zapErrs) > 0 {
+				msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(urls), strings.Join(zapErrs, "; "))
+			}
+			if len(zapErrs) > 0 {
+				// префикс «этап zap» — ошибки этапа не роняют задачу целиком
+				e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 600))
+			} else {
+				e.set(j, "running", msg, "")
 			}
 		}
 	}
 	if !j.ScanZap {
 		e.set(j, "running", "zap: выключен переключателем", "")
-	} else if !zapDone && len(webPorts) == 0 && j.URL == "" {
+	} else if len(urls) == 0 && j.URL == "" {
 		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
 	}
 

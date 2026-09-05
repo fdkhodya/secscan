@@ -32,6 +32,9 @@ type Config struct {
 	GmpSocket      string
 	GmpUser        string
 	GmpPass        string
+	// Crtsh — поиск соседних сайтов цели через crt.sh (Certificate
+	// Transparency) + TLS-сертификаты; 0 — только nmap/ZAP по цели.
+	Crtsh bool
 }
 
 func envOr(key, def string) string {
@@ -74,6 +77,7 @@ func loadConfig() Config {
 		GmpSocket:      envOr("SECSCAN_GMP_SOCKET", "/run/gvmd/gvmd.sock"),
 		GmpUser:        envOr("SECSCAN_GMP_USER", "admin"),
 		GmpPass:        envOr("SECSCAN_GMP_PASS", ""),
+		Crtsh:          envOr("SECSCAN_CRTSH", "1") != "0",
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"
