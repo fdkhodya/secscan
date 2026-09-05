@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secscan — вход</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6; display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  .card { background:#171a21; border:1px solid #262b36; border-radius:12px; padding:32px; width:340px; }
+  h1 { font-size:20px; margin:0 0 4px; } p.sub { color:#8b93a3; margin:0 0 20px; font-size:13px; }
+  label { display:block; font-size:13px; color:#aab2c0; margin:10px 0 4px; }
+  input { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #2c323d; background:#0f1115; color:#eee; }
+  button { margin-top:18px; width:100%; padding:10px; border:0; border-radius:8px; background:#2f6fed; color:#fff; font-size:15px; cursor:pointer; }
+  .err { color:#f87171; font-size:13px; margin-top:10px; }
+</style>
+</head>
+<body>
+  <form class="card" method="post" action="/login">
+    <h1>secscan</h1>
+    <p class="sub">Локальный сканер уязвимостей</p>
+    <label>Логин</label><input name="user" autocomplete="username" required>
+    <label>Пароль</label><input name="pass" type="password" autocomplete="current-password" required>
+    <button type="submit">Войти</button>
+    {{ if . }}
+    <div class="err">Неверный логин или пароль</div>
+    {{ end }}
+  </form>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# бинарник и локальные данные
+/secscan
+secscan
+/data/
+work/
+
+# env с паролем
+.env
+
+# прочее
+*.log
+*.retry
+.idea/
+.vscode/

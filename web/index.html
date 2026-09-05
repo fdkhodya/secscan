@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secscan — сканирование</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6; }
+  header { display:flex; align-items:center; gap:14px; padding:14px 22px; background:#14171d; border-bottom:1px solid #232834; }
+  header h1 { font-size:18px; margin:0; } header h1 span { color:#2f6fed; }
+  .logout { margin-left:auto; color:#8b93a3; font-size:13px; text-decoration:none; }
+  main { max-width:1080px; margin:22px auto; padding:0 18px; }
+  .scan-row { display:flex; gap:10px; }
+  #target { flex:1; padding:11px 12px; border-radius:10px; border:1px solid #2c323d; background:#14171d; color:#eee; font-size:15px; }
+  #run { padding:11px 22px; border:0; border-radius:10px; background:#2f6fed; color:#fff; font-size:15px; cursor:pointer; }
+  #run:disabled { opacity:.5; cursor:wait; }
+  .hint { color:#7d8594; font-size:12px; margin:8px 2px; }
+  table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #20242e; }
+  th { color:#8b93a3; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  .st { padding:3px 9px; border-radius:20px; font-size:12px; }
+  .st-queued { background:#2a2f3a; color:#aab2c0; }
+  .st-running { background:#1e3a5f; color:#7ab8ff; }
+  .st-done { background:#173a26; color:#6ee7a0; }
+  .st-error { background:#4a1d1d; color:#fca5a5; }
+  a.report { color:#7ab8ff; text-decoration:none; }
+  .empty { color:#5b6372; text-align:center; padding:40px; }
+  #err { color:#f87171; font-size:13px; margin-top:8px; min-height:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>sec<span>scan</span></h1>
+  <form method="post" action="/logout" style="margin-left:auto"><button type="submit" class="logout" style="background:none;border:0;cursor:pointer">Выйти</button></form>
+</header>
+<main>
+  <div class="scan-row">
+    <input id="target" placeholder="IP-адрес, домен или http(s)://url — например 192.168.7.7 или https://example.com" autocomplete="off">
+    <button id="run" onclick="startScan()">Сканировать</button>
+  </div>
+  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (в разработке). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
+  <div id="err"></div>
+  <table>
+    <thead><tr><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6" class="empty">Задач пока нет</td></tr></tbody>
+  </table>
+</main>
+<script>
+let lastId = '';
+async function startScan() {
+  const t = document.getElementById('target').value.trim();
+  if (!t) return;
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  document.getElementById('err').textContent = '';
+  try {
+    const r = await fetch('/api/scans', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:t})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    document.getElementById('target').value = '';
+  } catch(e) { document.getElementById('err').textContent = 'Ошибка: ' + e.message; }
+  btn.disabled = false;
+  refresh();
+}
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function refresh() {
+  try {
+    const r = await fetch('/api/scans');
+    const jobs = await r.json();
+    const tb = document.getElementById('rows');
+    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Задач пока нет</td></tr>'; return; }
+    tb.innerHTML = jobs.map(j => {
+      const done = j.status === 'done';
+      const err = j.status === 'error';
+      const report = (done || err) ? `<a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
+      return `<tr>
+        <td>${esc(j.id)}</td><td>${esc(j.target)}</td>
+        <td><span class="st st-${esc(j.status)}">${esc(j.status)}</span></td>
+        <td>${esc(j.stage || '')}${err ? ' <span style="color:#f87171">'+esc(j.error||'')+'</span>' : ''}</td>
+        <td>${esc(j.created_at)}</td><td>${report}</td></tr>`;
+    }).join('');
+  } catch(e) {}
+}
+setInterval(refresh, 3000);
+refresh();
+</script>
+</body>
+</html>

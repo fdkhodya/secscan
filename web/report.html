@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secscan — отчёт {{ .Job.Target }}</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6; }
+  header { padding:16px 24px; background:#14171d; border-bottom:1px solid #232834; }
+  header a { color:#7ab8ff; text-decoration:none; font-size:14px; }
+  header h1 { font-size:20px; margin:6px 0 2px; word-break:break-all; }
+  header .meta { color:#8b93a3; font-size:13px; }
+  main { max-width:1100px; margin:20px auto; padding:0 18px; }
+  .counts { display:flex; gap:10px; flex-wrap:wrap; margin:14px 0 22px; }
+  .chip { padding:8px 14px; border-radius:10px; font-size:14px; border:1px solid #262b36; }
+  .chip b { font-size:18px; display:block; }
+  .sev-critical { background:#3a1212; border-color:#7f1d1d; color:#fecaca; }
+  .sev-high { background:#3a1f10; border-color:#7c2d12; color:#fed7aa; }
+  .sev-medium { background:#3a2e0e; border-color:#713f12; color:#fde68a; }
+  .sev-low { background:#12303a; border-color:#155e75; color:#a5f3fc; }
+  .sev-info { background:#1c212b; border-color:#374151; color:#cbd5e1; }
+  .finding { border:1px solid #262b36; border-radius:12px; margin-bottom:14px; overflow:hidden; }
+  .finding .head { display:flex; gap:12px; align-items:center; padding:12px 16px; cursor:pointer; }
+  .finding .head .sev { padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; white-space:nowrap; }
+  .finding .head .title { font-size:15px; }
+  .finding .head .src { margin-left:auto; color:#8b93a3; font-size:12px; }
+  .finding .body { padding:0 16px 14px; border-top:1px solid #1f242e; }
+  .finding .body.hidden { display:none; }
+  .finding .body h4 { color:#8b93a3; font-size:11px; text-transform:uppercase; letter-spacing:.5px; margin:12px 0 4px; }
+  .finding .body pre { background:#0c0e12; padding:10px; border-radius:8px; overflow:auto; font-size:12px; color:#9fb0c8; white-space:pre-wrap; margin:4px 0; }
+  .finding .body p { margin:4px 0; font-size:14px; line-height:1.45; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; background:#2a2f3a; color:#aab2c0; }
+  .none { color:#5b6372; padding:30px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← Назад к сканированию</a>
+  <h1>{{ .Job.Target }}</h1>
+  <div class="meta">
+    ID: {{ .Job.ID }} · статус: {{ .Job.Status }} · создан: {{ .Job.CreatedAt }}
+    {{ if .Job.DoneAt }} · завершён: {{ .Job.DoneAt }}{{ end }}
+    {{ if .Job.Error }} · <span style="color:#f87171">ошибка: {{ .Job.Error }}</span>{{ end }}
+  </div>
+</header>
+<main>
+  <div class="counts">
+    {{ range .Counts }}
+    <div class="chip sev-{{ .Sev }}"><b>{{ .N }}</b>{{ .Label }}</div>
+    {{ end }}
+  </div>
+  {{ if .Rows }}
+    {{ range .Rows }}
+    <div class="finding">
+      <div class="head" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <span class="sev sev-{{ .Severity }}">{{ sevLabel .Severity }}</span>
+        <span class="title">{{ .Title }}</span>
+        <span class="src">{{ .Source }}{{ if .CVE }} · {{ .CVE }}{{ end }}{{ if .CVSS }} · CVSS {{ printf "%.1f" .CVSS }}{{ end }}</span>
+      </div>
+      <div class="body hidden">
+        {{ if .Host }}<p>Хост: <b>{{ .Host }}</b>{{ if .Port }}:{{ .Port }}{{ end }} {{ if .Protocol }}({{ .Protocol }}){{ end }}</p>{{ end }}
+        {{ if .URL }}<p>URL: <b>{{ .URL }}</b></p>{{ end }}
+        {{ if .Description }}<h4>Описание</h4><p>{{ .Description }}</p>{{ end }}
+        {{ if .Remediation }}<h4>Как исправить</h4><p>{{ .Remediation }}</p>{{ end }}
+        {{ if .Evidence }}<h4>Доказательства</h4><pre>{{ .Evidence }}</pre>{{ end }}
+        {{ if .Confidence }}<span class="badge">уверенность: {{ .Confidence }}</span>{{ end }}
+      </div>
+    </div>
+    {{ end }}
+  {{ else }}
+    <div class="none">Находок нет{{ if ne .Job.Status "done" }} — скан ещё не завершён{{ end }}.</div>
+  {{ end }}
+</main>
+</body>
+</html>

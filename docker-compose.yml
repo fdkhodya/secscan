@@ -1,0 +1,20 @@
+# dev-запуск secscan. Образ собирается локально (см. Dockerfile).
+# Сканеры (nmap, zap) запускаются как контейнеры через docker.sock хоста.
+services:
+  secscan:
+    build: .
+    image: secscan:latest
+    container_name: secscan
+    restart: always
+    ports:
+      - "8510:8510"
+    environment:
+      SECSCAN_USER: ${SECSCAN_USER:-admin}
+      SECSCAN_PASS: ${SECSCAN_PASS:?укажите SECSCAN_PASS в .env}
+      SECSCAN_DATA: /data
+      # путь к ./data НА ХОСТЕ: в него монтируются рабочие каталоги сканеров
+      SECSCAN_HOST_DATA: /opt/projects/secscan/data
+      SECSCAN_ZAP_ENABLED: ${SECSCAN_ZAP_ENABLED:-1}
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
