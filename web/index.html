@@ -17,6 +17,10 @@
   #run { padding:11px 22px; border:0; border-radius:10px; background:#2f6fed; color:#fff; font-size:15px; cursor:pointer; }
   #run:disabled { opacity:.5; cursor:wait; }
   .hint { color:#7d8594; font-size:12px; margin:8px 2px; }
+  .settings { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:10px 0 4px; padding:10px 12px; background:#14171d; border:1px solid #232834; border-radius:10px; font-size:13px; }
+  .s-title { color:#8b93a3; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  .sw { display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:#cdd5e0; }
+  .sw input { accent-color:#2f6fed; width:15px; height:15px; }
   table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #20242e; }
   th { color:#8b93a3; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
@@ -40,8 +44,15 @@
     <input id="target" placeholder="IP-адрес, домен или http(s)://url — например 192.168.7.7 или https://example.com" autocomplete="off">
     <button id="run" onclick="startScan()">Сканировать</button>
   </div>
-  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (в разработке). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
+  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (через bridge). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
   <div id="err"></div>
+  <div class="settings">
+    <span class="s-title">Виды проверок:</span>
+    <label class="sw"><input type="checkbox" id="sw-nmap" checked disabled> nmap (порты/сервисы)</label>
+    <label class="sw"><input type="checkbox" id="sw-zap"> OWASP ZAP (веб)</label>
+    <label class="sw"><input type="checkbox" id="sw-openvas"> OpenVAS</label>
+    <label class="sw"><input type="checkbox" id="sw-vulners"> NSE vulners (CVE по nmap)</label>
+  </div>
   <table>
     <thead><tr><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
     <tbody id="rows"><tr><td colspan="6" class="empty">Задач пока нет</td></tr></tbody>
@@ -85,6 +96,30 @@ async function refresh() {
 }
 setInterval(refresh, 3000);
 refresh();
+
+// ---- настройки (переключатели) ----
+let settings = {zap_enabled:false, openvas_enabled:false, vulners:false};
+async function loadSettings() {
+  try {
+    const r = await fetch('/api/settings');
+    settings = await r.json();
+    document.getElementById('sw-zap').checked = !!settings.zap_enabled;
+    document.getElementById('sw-openvas').checked = !!settings.openvas_enabled;
+    document.getElementById('sw-vulners').checked = !!settings.vulners;
+  } catch(e) {}
+}
+async function saveSettings() {
+  settings.zap_enabled = document.getElementById('sw-zap').checked;
+  settings.openvas_enabled = document.getElementById('sw-openvas').checked;
+  settings.vulners = document.getElementById('sw-vulners').checked;
+  try {
+    await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(settings)});
+  } catch(e) {}
+}
+document.getElementById('sw-zap').addEventListener('change', saveSettings);
+document.getElementById('sw-openvas').addEventListener('change', saveSettings);
+document.getElementById('sw-vulners').addEventListener('change', saveSettings);
+loadSettings();
 </script>
 </body>
 </html>

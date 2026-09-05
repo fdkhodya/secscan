@@ -14,11 +14,21 @@ import (
 type Engine struct {
 	store *Store
 	cfg   *Config
+	defs  Settings
 	queue chan string
 }
 
 func NewEngine(store *Store, cfg *Config) *Engine {
-	return &Engine{store: store, cfg: cfg, queue: make(chan string, 10)}
+	return &Engine{
+		store: store,
+		cfg:   cfg,
+		defs: Settings{
+			ZapEnabled:     cfg.ZapEnabled,
+			OpenVASEnabled: cfg.OpenVASMode == "bridge" && cfg.OpenVASURL != "",
+			Vulners:        cfg.NmapVulners,
+		},
+		queue: make(chan string, 10),
+	}
 }
 
 // Start запускает единственный воркер (сканы последовательны).
@@ -29,6 +39,9 @@ func (e *Engine) Start() {
 		}
 	}()
 }
+
+// Defaults возвращает настройки по умолчанию (из env при первом запуске).
+func (e *Engine) Defaults() Settings { return e.defs }
 
 // Submit создаёт задачу и ставит её в очередь.
 func (e *Engine) Submit(target string) (string, error) {
@@ -54,6 +67,12 @@ func (e *Engine) Submit(target string) (string, error) {
 	if isURLTarget(target) {
 		j.URL = target
 	}
+	// снапшот включённых проверок на момент запуска
+	set, _ := e.store.LoadSettings(e.defs)
+	j.ScanZap = set.ZapEnabled
+	j.ScanOpenVAS = set.OpenVASEnabled
+	j.ScanVulners = set.Vulners
+
 	if err := e.store.SaveJob(j); err != nil {
 		return "", err
 	}
@@ -96,7 +115,7 @@ func (e *Engine) run(id string) {
 	defer cancel()
 
 	// 1) nmap
-	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir, e.cfg.NmapVulners)
+	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir, j.ScanVulners)
 	if err != nil {
 		msg := fmt.Sprintf("этап nmap: %v", err)
 		e.set(j, "running", "nmap: ошибка", msg)
@@ -109,7 +128,7 @@ func (e *Engine) run(id string) {
 
 	// 2) ZAP (если включён и есть куда сканировать)
 	zapDone := false
-	if e.cfg.ZapEnabled {
+	if j.ScanZap {
 		urls := zapTargets(j, webPorts)
 		if len(urls) > 0 {
 			e.set(j, "running", "zap: активное сканирование веб-приложения", "")
@@ -127,14 +146,14 @@ func (e *Engine) run(id string) {
 			}
 		}
 	}
-	if !e.cfg.ZapEnabled {
-		e.set(j, "running", "zap: отключён", "")
+	if !j.ScanZap {
+		e.set(j, "running", "zap: выключен переключателем", "")
 	} else if !zapDone && len(webPorts) == 0 && j.URL == "" {
 		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
 	}
 
-	// 3) OpenVAS (только если включён и задан адрес моста)
-	if e.cfg.OpenVASMode == "bridge" && e.cfg.OpenVASURL != "" {
+	// 3) OpenVAS (только если включён переключателем и задан адрес моста)
+	if j.ScanOpenVAS && e.cfg.OpenVASMode == "bridge" && e.cfg.OpenVASURL != "" {
 		e.set(j, "running", "openvas: сканирование (мост "+e.cfg.OpenVASURL+")", "")
 		findings, err := openvasBridgeScan(ctx, e.cfg.OpenVASURL, e.cfg.OpenVASToken, j.Host)
 		if err != nil {
@@ -143,8 +162,10 @@ func (e *Engine) run(id string) {
 			j.Findings = append(j.Findings, findings...)
 			_ = e.store.SaveJob(j)
 		}
+	} else if j.ScanOpenVAS {
+		e.set(j, "running", "openvas: включён, но bridge не настроен (SECSCAN_OPENVAS_MODE/URL) — пропущен", "")
 	} else {
-		e.set(j, "running", "openvas: выключен (SECSCAN_OPENVAS_MODE=off) — Greenbone не запущен на этом хосте", "")
+		e.set(j, "running", "openvas: выключен переключателем", "")
 	}
 
 	if ctx.Err() != nil {

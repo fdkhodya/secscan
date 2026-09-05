@@ -75,19 +75,30 @@ type Finding struct {
 	Confidence  string   `json:"confidence,omitempty"`
 }
 
+// Settings — включённые виды проверок (хранятся в data/settings.json).
+type Settings struct {
+	ZapEnabled     bool `json:"zap_enabled"`
+	OpenVASEnabled bool `json:"openvas_enabled"`
+	Vulners        bool `json:"vulners"`
+}
+
 // Job — одна задача сканирования.
 type Job struct {
-	ID        string    `json:"id"`
-	Target    string    `json:"target"` // что ввёл пользователь (ip/домен/url)
-	Host      string    `json:"host"`   // хост для nmap
-	URL       string    `json:"url,omitempty"`
-	Status    string    `json:"status"` // queued|running|done|error
-	Stage     string    `json:"stage,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt string    `json:"created_at"`
-	StartedAt string    `json:"started_at,omitempty"`
-	DoneAt    string    `json:"done_at,omitempty"`
-	Findings  []Finding `json:"findings,omitempty"`
+	ID        string `json:"id"`
+	Target    string `json:"target"` // что ввёл пользователь (ip/домен/url)
+	Host      string `json:"host"`   // хост для nmap
+	URL       string `json:"url,omitempty"`
+	Status    string `json:"status"` // queued|running|done|error
+	Stage     string `json:"stage,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt string `json:"created_at"`
+	StartedAt string `json:"started_at,omitempty"`
+	DoneAt    string `json:"done_at,omitempty"`
+	// снапшот включённых проверок на момент запуска скана
+	ScanZap     bool      `json:"scan_zap"`
+	ScanOpenVAS bool      `json:"scan_openvas"`
+	ScanVulners bool      `json:"scan_vulners"`
+	Findings    []Finding `json:"findings,omitempty"`
 }
 
 // SummaryCount возвращает число находок по каждой критичности.

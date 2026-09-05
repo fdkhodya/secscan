@@ -132,6 +132,24 @@ func main() {
 	mux.HandleFunc("GET /api/scans", auth.requireAuth(apiListScans(store)))
 	mux.HandleFunc("GET /api/scans/{id}", auth.requireAuth(apiGetScan(store)))
 
+	// Настройки видов проверок (переключатели в UI)
+	mux.HandleFunc("GET /api/settings", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		set, _ := store.LoadSettings(eng.Defaults())
+		writeJSON(w, http.StatusOK, set)
+	}))
+	mux.HandleFunc("PUT /api/settings", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		var set Settings
+		if err := json.NewDecoder(r.Body).Decode(&set); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный JSON"})
+			return
+		}
+		if err := store.SaveSettings(set); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, set)
+	}))
+
 	// Отчёт и экспорт
 	mux.HandleFunc("GET /reports/{id}", auth.requireAuth(apiReport(store)))
 	mux.HandleFunc("GET /reports/{id}/export.csv", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {

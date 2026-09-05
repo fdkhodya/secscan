@@ -12,8 +12,40 @@ import (
 
 // Store — простое файловое хранилище задач (JSON в data/jobs/<id>.json).
 type Store struct {
-	dir string
-	mu  sync.Mutex
+	dir     string
+	dataDir string
+	mu      sync.Mutex
+}
+
+func (s *Store) settingsPath() string { return filepath.Join(s.dataDir, "settings.json") }
+
+// LoadSettings читает настройки; при отсутствии файла возвращает defaults.
+func (s *Store) LoadSettings(def Settings) (Settings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.settingsPath())
+	if err != nil {
+		return def, nil
+	}
+	var out Settings
+	if err := json.Unmarshal(b, &out); err != nil {
+		return def, nil
+	}
+	return out, nil
+}
+
+func (s *Store) SaveSettings(set Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := json.MarshalIndent(set, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := s.settingsPath() + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o640); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.settingsPath())
 }
 
 func NewStore(dataDir string) (*Store, error) {
@@ -21,7 +53,10 @@ func NewStore(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	return &Store{dir: dir}, nil
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return nil, err
+	}
+	return &Store{dir: dir, dataDir: dataDir}, nil
 }
 
 func (s *Store) jobPath(id string) string {
