@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"embed"
+	"encoding/csv"
 	"fmt"
 	"html/template"
 	"io"
@@ -69,4 +71,30 @@ func renderReport(w io.Writer, j *Job) error {
 		return fmt.Errorf("report template not initialized")
 	}
 	return reportTmpl.Execute(w, data)
+}
+
+// exportCSV формирует CSV-отчёт (UTF-8 c BOM для Excel).
+func exportCSV(j *Job) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteString("\ufeff") // BOM
+	w := csv.NewWriter(&buf)
+	w.Comma = ';'
+	header := []string{"Критичность", "Источник", "CVE", "CVSS", "Заголовок",
+		"Хост", "Порт", "URL", "Описание", "Как исправить", "Доказательства", "Уверенность"}
+	if err := w.Write(header); err != nil {
+		return nil, err
+	}
+	for _, f := range j.SortedFindings() {
+		row := []string{f.Severity.Label(), f.Source, f.CVE, fmt.Sprintf("%.1f", f.CVSS),
+			f.Title, f.Host, fmt.Sprintf("%d", f.Port), f.URL,
+			f.Description, f.Remediation, f.Evidence, f.Confidence}
+		if err := w.Write(row); err != nil {
+			return nil, err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

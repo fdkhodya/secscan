@@ -10,6 +10,7 @@
   body { margin:0; font-family: system-ui, sans-serif; background:#0f1115; color:#e6e6e6; }
   header { padding:16px 24px; background:#14171d; border-bottom:1px solid #232834; }
   header a { color:#7ab8ff; text-decoration:none; font-size:14px; }
+  .btn { display:inline-block; margin-left:10px; padding:4px 12px; border:1px solid #2c323d; border-radius:8px; font-size:13px; background:#1a1e26; }
   header h1 { font-size:20px; margin:6px 0 2px; word-break:break-all; }
   header .meta { color:#8b93a3; font-size:13px; }
   main { max-width:1100px; margin:20px auto; padding:0 18px; }
@@ -38,6 +39,10 @@
 <body>
 <header>
   <a href="/">← Назад к сканированию</a>
+  {{ if .Job.ID }}<span style="float:right">
+    <a class="btn" href="/reports/{{ .Job.ID }}/export.csv">CSV</a>
+    <a class="btn" href="/reports/{{ .Job.ID }}/export.pdf">PDF</a>
+  </span>{{ end }}
   <h1>{{ .Job.Target }}</h1>
   <div class="meta">
     ID: {{ .Job.ID }} · статус: {{ .Job.Status }} · создан: {{ .Job.CreatedAt }}

@@ -122,8 +122,38 @@ func main() {
 	mux.HandleFunc("GET /api/scans", auth.requireAuth(apiListScans(store)))
 	mux.HandleFunc("GET /api/scans/{id}", auth.requireAuth(apiGetScan(store)))
 
-	// Отчёт
+	// Отчёт и экспорт
 	mux.HandleFunc("GET /reports/{id}", auth.requireAuth(apiReport(store)))
+	mux.HandleFunc("GET /reports/{id}/export.csv", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		j, err := store.LoadJob(r.PathValue("id"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		b, err := exportCSV(j)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=secscan-%s.csv", j.ID))
+		_, _ = w.Write(b)
+	}))
+	mux.HandleFunc("GET /reports/{id}/export.pdf", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		j, err := store.LoadJob(r.PathValue("id"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		b, err := exportPDF(j)
+		if err != nil {
+			http.Error(w, "pdf: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=secscan-%s.pdf", j.ID))
+		_, _ = w.Write(b)
+	}))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
