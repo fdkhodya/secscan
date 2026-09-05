@@ -21,12 +21,6 @@ services:
       # хост-путь к ./data: в него монтируются рабочие каталоги сканеров (ZAP,
       # nuclei-шаблоны) и он же используется для docker -v
       SECSCAN_HOST_DATA: ${SECSCAN_HOST_DATA:-/opt/projects/secscan/data}
-      SECSCAN_ZAP_ENABLED: ${SECSCAN_ZAP_ENABLED:-1}
-      SECSCAN_NUCLEI_ENABLED: ${SECSCAN_NUCLEI_ENABLED:-1}
-      SECSCAN_UDP_ENABLED: ${SECSCAN_UDP_ENABLED:-0}
-      SECSCAN_NSE_ENABLED: ${SECSCAN_NSE_ENABLED:-1}
-      SECSCAN_NMAP_VULNERS: ${SECSCAN_NMAP_VULNERS:-1}
-      SECSCAN_SSL_ENABLED: ${SECSCAN_SSL_ENABLED:-1}
       SECSCAN_NMAP_IMAGE: ${SECSCAN_NMAP_IMAGE:-instrumentisto/nmap:latest}
       SECSCAN_ZAP_IMAGE: ${SECSCAN_ZAP_IMAGE:-ghcr.io/zaproxy/zaproxy:stable}
       SECSCAN_NUCLEI_IMAGE: ${SECSCAN_NUCLEI_IMAGE:-projectdiscovery/nuclei:v2.9.14}

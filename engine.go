@@ -16,7 +16,6 @@ import (
 type Engine struct {
 	store *Store
 	cfg   *Config
-	defs  Settings
 	queue chan string
 }
 
@@ -24,14 +23,6 @@ func NewEngine(store *Store, cfg *Config) *Engine {
 	return &Engine{
 		store: store,
 		cfg:   cfg,
-		defs: Settings{
-			ZapEnabled:    cfg.ZapEnabled,
-			NucleiEnabled: cfg.NucleiEnabled,
-			UdpEnabled:    cfg.UdpEnabled,
-			NseEnabled:    cfg.NseEnabled,
-			Vulners:       cfg.Vulners,
-			SslEnabled:    cfg.SslEnabled,
-		},
 		queue: make(chan string, 10),
 	}
 }
@@ -44,9 +35,6 @@ func (e *Engine) Start() {
 		}
 	}()
 }
-
-// Defaults возвращает настройки по умолчанию (из env при первом запуске).
-func (e *Engine) Defaults() Settings { return e.defs }
 
 // Submit создаёт задачу и ставит её в очередь.
 func (e *Engine) Submit(target string) (string, error) {
@@ -68,18 +56,14 @@ func (e *Engine) Submit(target string) (string, error) {
 		Status:    "queued",
 		Stage:     "очередь",
 		CreatedAt: nowRFC(),
+		Stages: map[string]string{
+			"tcp": "pending", "udp": "pending", "zap": "pending",
+			"ssl": "pending", "nuclei": "pending",
+		},
 	}
 	if isURLTarget(target) {
 		j.URL = target
 	}
-	// снапшот включённых проверок на момент запуска
-	set, _ := e.store.LoadSettings(e.defs)
-	j.ScanZap = set.ZapEnabled
-	j.ScanNuclei = set.NucleiEnabled
-	j.ScanUdp = set.UdpEnabled
-	j.ScanNse = set.NseEnabled
-	j.ScanVulners = set.Vulners
-	j.ScanSsl = set.SslEnabled
 
 	if err := e.store.SaveJob(j); err != nil {
 		return "", err
@@ -111,6 +95,16 @@ func (e *Engine) set(j *Job, status, stage string, errText string) {
 	}
 }
 
+// setStage обновляет статус этапа задачи (tcp|udp|zap|ssl|nuclei):
+// pending|running|done|error.
+func (e *Engine) setStage(j *Job, key, st string) {
+	if j.Stages == nil {
+		j.Stages = map[string]string{}
+	}
+	j.Stages[key] = st
+	_ = e.store.SaveJob(j)
+}
+
 func (e *Engine) run(id string) {
 	j, err := e.store.LoadJob(id)
 	if err != nil {
@@ -123,9 +117,9 @@ func (e *Engine) run(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
 	defer cancel()
 
-	// 1) nmap TCP: порты/сервисы (+NSE: vulners и доп. скрипты по тумблерам)
+	// 1) nmap TCP: порты/сервисы + NSE (vulners CVE и доп. скрипты) — всегда
 	nmapFatal := false
-	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg, j.Host, j.ScanVulners, j.ScanNse)
+	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg, j.Host, true, true)
 	if err != nil {
 		msg := fmt.Sprintf("этап nmap: %v", err)
 		e.set(j, "running", "nmap: ошибка", msg)
@@ -133,116 +127,128 @@ func (e *Engine) run(id string) {
 			nmapFatal = true // нет даже частичных результатов
 		}
 	}
+	if nmapFatal {
+		e.setStage(j, "tcp", "error")
+	} else {
+		e.setStage(j, "tcp", "done")
+	}
 	if len(nmapFindings) > 0 {
 		j.Findings = append(j.Findings, nmapFindings...)
 		_ = e.store.SaveJob(j)
 	}
 	sort.Ints(webPorts)
 
-	// 2) nmap UDP (top-50 портов) — по тумблеру
-	if j.ScanUdp {
-		e.set(j, "running", "nmap: сканирование UDP-портов", "")
-		udpFindings, err := nmapUDPScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host)
-		if err != nil {
-			e.set(j, "running", "nmap-udp: ошибка", fmt.Sprintf("этап nmap-udp: %v", err))
-		} else if len(udpFindings) > 0 {
+	// 2) nmap UDP (top-50 портов) — всегда
+	e.set(j, "running", "nmap: сканирование UDP-портов", "")
+	e.setStage(j, "udp", "running")
+	udpFindings, err := nmapUDPScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host)
+	if err != nil {
+		e.set(j, "running", "nmap-udp: ошибка", fmt.Sprintf("этап nmap-udp: %v", err))
+		e.setStage(j, "udp", "error")
+	} else {
+		e.setStage(j, "udp", "done")
+		if len(udpFindings) > 0 {
 			j.Findings = append(j.Findings, udpFindings...)
 			_ = e.store.SaveJob(j)
 		}
-	} else {
-		e.set(j, "running", "nmap-udp: выключен переключателем", "")
 	}
 
-	// 3) ZAP: цель и все найденные на её IP сайты (http/https)
+	// 3) ZAP: цель и все найденные на её IP сайты (http/https) — всегда
 	var webURLs []string
-	if j.ScanZap {
-		webURLs = webTargetList(ctx, e.cfg, j, webPorts)
-		if len(webURLs) > 0 {
-			e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(webURLs)), "")
-			okN, zapErrs := 0, []string{}
-			for i, u := range webURLs {
-				e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(webURLs), u), "")
-				// у каждого сайта собственный бюджет; общий ctx не даёт
-				// одному медленному сайту съесть время остальных
-				uCtx, cancel := context.WithTimeout(ctx, zapTargetTimeout)
-				findings, err := zapScan(uCtx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
-				cancel()
-				if err != nil {
-					zapErrs = append(zapErrs, u+": "+firstLine(err.Error()))
-					continue
-				}
-				j.Findings = append(j.Findings, findings...)
-				okN++
-				_ = e.store.SaveJob(j)
-			}
-			msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
-			if len(zapErrs) > 0 {
-				msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(webURLs), strings.Join(zapErrs, "; "))
-			}
-			if len(zapErrs) > 0 {
-				// префикс «этап zap» — ошибки этапа не роняют задачу целиком
-				e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 600))
-			} else {
-				e.set(j, "running", msg, "")
-			}
-		}
-	} else {
-		e.set(j, "running", "zap: выключен переключателем", "")
-	}
-
-	// 4) TLS/SSL-анализ (testssl.sh) — по https-целям
-	if j.ScanSsl {
-		sslURLs := sslTargetList(ctx, e.cfg, j, webPorts)
-		if len(sslURLs) > 0 {
-			e.set(j, "running", fmt.Sprintf("ssl: TLS/SSL-анализ — целей: %d", len(sslURLs)), "")
-			sslErrs := []string{}
-			for i, u := range sslURLs {
-				e.set(j, "running", fmt.Sprintf("ssl: %d/%d — %s", i+1, len(sslURLs), u), "")
-				uCtx, cancel := context.WithTimeout(ctx, sslTargetTimeout)
-				findings, err := sslScan(uCtx, e.cfg, j.ID, i, u)
-				cancel()
-				if err != nil {
-					sslErrs = append(sslErrs, u+": "+firstLine(err.Error()))
-					continue
-				}
-				j.Findings = append(j.Findings, findings...)
-				_ = e.store.SaveJob(j)
-			}
-			if len(sslErrs) > 0 {
-				e.set(j, "running", "ssl: с ошибками",
-					"этап ssl: "+truncate("ssl: ошибки: "+strings.Join(sslErrs, "; "), 600))
-			} else {
-				e.set(j, "running", fmt.Sprintf("ssl: проверено целей: %d", len(sslURLs)), "")
-			}
-		} else {
-			e.set(j, "running", "ssl: https-сервисы не обнаружены — пропущен", "")
-		}
-	} else {
-		e.set(j, "running", "ssl: выключен переключателем", "")
-	}
-
-	// 5) nuclei: сигнатурный веб-сканер (лёгкая замена OpenVAS)
-	if j.ScanNuclei {
-		nucURLs := webTargetList(ctx, e.cfg, j, webPorts)
-		if len(nucURLs) > 0 {
-			e.set(j, "running", fmt.Sprintf("nuclei: сигнатурный скан — целей: %d", len(nucURLs)), "")
-			nucCtx, cancel := context.WithTimeout(ctx, nucleiStageTimeout)
-			findings, err := nucleiScan(nucCtx, e.cfg, j.ID, nucURLs, func(stage string) {
-				e.set(j, "running", stage, "")
-			})
+	e.setStage(j, "zap", "running")
+	webURLs = webTargetList(ctx, e.cfg, j, webPorts)
+	if len(webURLs) > 0 {
+		e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(webURLs)), "")
+		okN, zapErrs := 0, []string{}
+		for i, u := range webURLs {
+			e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(webURLs), u), "")
+			// у каждого сайта собственный бюджет; общий ctx не даёт
+			// одному медленному сайту съесть время остальных
+			uCtx, cancel := context.WithTimeout(ctx, zapTargetTimeout)
+			findings, err := zapScan(uCtx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
 			cancel()
 			if err != nil {
-				e.set(j, "running", "nuclei: с ошибками", "этап nuclei: "+truncate(err.Error(), 600))
-			} else {
-				j.Findings = append(j.Findings, findings...)
-				_ = e.store.SaveJob(j)
-				e.set(j, "running", fmt.Sprintf("nuclei: проверено целей: %d", len(nucURLs)), "")
+				zapErrs = append(zapErrs, u+": "+firstLine(err.Error()))
+				continue
 			}
+			j.Findings = append(j.Findings, findings...)
+			okN++
+			_ = e.store.SaveJob(j)
+		}
+		msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
+		if len(zapErrs) > 0 {
+			msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(webURLs), strings.Join(zapErrs, "; "))
+			e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 600))
 		} else {
-			e.set(j, "running", "nuclei: веб-сервисы не обнаружены — пропущен", "")
+			e.set(j, "running", msg, "")
+		}
+		if okN == 0 && len(zapErrs) > 0 {
+			e.setStage(j, "zap", "error")
+		} else {
+			e.setStage(j, "zap", "done")
 		}
 	} else {
-		e.set(j, "running", "nuclei: выключен переключателем", "")
+		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
+		e.setStage(j, "zap", "done")
+	}
+
+	// 4) TLS/SSL-анализ (testssl.sh) — всегда
+	e.setStage(j, "ssl", "running")
+	sslURLs := sslTargetList(ctx, e.cfg, j, webPorts)
+	if len(sslURLs) > 0 {
+		e.set(j, "running", fmt.Sprintf("ssl: TLS/SSL-анализ — целей: %d", len(sslURLs)), "")
+		sslErrs := []string{}
+		for i, u := range sslURLs {
+			e.set(j, "running", fmt.Sprintf("ssl: %d/%d — %s", i+1, len(sslURLs), u), "")
+			uCtx, cancel := context.WithTimeout(ctx, sslTargetTimeout)
+			findings, err := sslScan(uCtx, e.cfg, j.ID, i, u)
+			cancel()
+			if err != nil {
+				sslErrs = append(sslErrs, u+": "+firstLine(err.Error()))
+				continue
+			}
+			j.Findings = append(j.Findings, findings...)
+			_ = e.store.SaveJob(j)
+		}
+		if len(sslErrs) > 0 {
+			e.set(j, "running", "ssl: с ошибками",
+				"этап ssl: "+truncate("ssl: ошибки: "+strings.Join(sslErrs, "; "), 600))
+			if len(sslErrs) >= len(sslURLs) {
+				e.setStage(j, "ssl", "error")
+			} else {
+				e.setStage(j, "ssl", "done")
+			}
+		} else {
+			e.set(j, "running", fmt.Sprintf("ssl: проверено целей: %d", len(sslURLs)), "")
+			e.setStage(j, "ssl", "done")
+		}
+	} else {
+		e.set(j, "running", "ssl: https-сервисы не обнаружены — пропущен", "")
+		e.setStage(j, "ssl", "done")
+	}
+
+	// 5) nuclei: сигнатурный веб-сканер — всегда
+	e.setStage(j, "nuclei", "running")
+	nucURLs := webTargetList(ctx, e.cfg, j, webPorts)
+	if len(nucURLs) > 0 {
+		e.set(j, "running", fmt.Sprintf("nuclei: сигнатурный скан — целей: %d", len(nucURLs)), "")
+		nucCtx, cancel := context.WithTimeout(ctx, nucleiStageTimeout)
+		findings, err := nucleiScan(nucCtx, e.cfg, j.ID, nucURLs, func(stage string) {
+			e.set(j, "running", stage, "")
+		})
+		cancel()
+		if err != nil {
+			e.set(j, "running", "nuclei: с ошибками", "этап nuclei: "+truncate(err.Error(), 600))
+			e.setStage(j, "nuclei", "error")
+		} else {
+			e.setStage(j, "nuclei", "done")
+			j.Findings = append(j.Findings, findings...)
+			_ = e.store.SaveJob(j)
+			e.set(j, "running", fmt.Sprintf("nuclei: проверено целей: %d", len(nucURLs)), "")
+		}
+	} else {
+		e.set(j, "running", "nuclei: веб-сервисы не обнаружены — пропущен", "")
+		e.setStage(j, "nuclei", "done")
 	}
 
 	if ctx.Err() != nil {

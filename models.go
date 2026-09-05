@@ -75,16 +75,6 @@ type Finding struct {
 	Confidence  string   `json:"confidence,omitempty"`
 }
 
-// Settings — включённые виды проверок (хранятся в data/settings.json).
-type Settings struct {
-	ZapEnabled    bool `json:"zap_enabled"`
-	NucleiEnabled bool `json:"nuclei_enabled"`
-	UdpEnabled    bool `json:"udp_enabled"`
-	NseEnabled    bool `json:"nse_enabled"` // доп. NSE-скрипты (ssl-enum-ciphers и др.)
-	Vulners       bool `json:"vulners"`
-	SslEnabled    bool `json:"ssl_enabled"` // TLS/SSL-анализ (testssl.sh)
-}
-
 // Job — одна задача сканирования.
 type Job struct {
 	ID        string `json:"id"`
@@ -97,14 +87,10 @@ type Job struct {
 	CreatedAt string `json:"created_at"`
 	StartedAt string `json:"started_at,omitempty"`
 	DoneAt    string `json:"done_at,omitempty"`
-	// снапшот включённых проверок на момент запуска скана
-	ScanZap     bool      `json:"scan_zap"`
-	ScanNuclei  bool      `json:"scan_nuclei"`
-	ScanUdp     bool      `json:"scan_udp"`
-	ScanNse     bool      `json:"scan_nse"`
-	ScanVulners bool      `json:"scan_vulners"`
-	ScanSsl     bool      `json:"scan_ssl"`
-	Findings    []Finding `json:"findings,omitempty"`
+	// Stages — статусы этапов (все виды проверок выполняются всегда):
+	// tcp, udp, zap, ssl, nuclei → pending|running|done|error.
+	Stages   map[string]string `json:"stages,omitempty"`
+	Findings []Finding         `json:"findings,omitempty"`
 }
 
 // SummaryCount возвращает число находок по каждой критичности.

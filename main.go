@@ -16,24 +16,19 @@ import (
 var webFS embed.FS
 
 type Config struct {
-	Listen        string
-	DataDir       string
-	HostDataDir   string
-	User          string
-	Pass          string
-	NmapImage     string
-	ZapImage      string
-	NucleiImage   string
-	SslImage      string
-	ZapEnabled    bool
-	DockerNet     string
-	Vulners       bool // NSE vulners (CVE по версиям)
-	NseEnabled    bool // доп. NSE-скрипты (ssl-enum-ciphers, http-security-headers...)
-	UdpEnabled    bool // nmap UDP (top-50)
-	SslEnabled    bool // TLS/SSL-анализ (testssl.sh)
-	NucleiEnabled bool
-	// Crtsh — поиск соседних сайтов цели через crt.sh (Certificate
-	// Transparency) + TLS-сертификаты; 0 — только nmap/ZAP по цели.
+	Listen      string
+	DataDir     string
+	HostDataDir string
+	User        string
+	Pass        string
+	NmapImage   string
+	ZapImage    string
+	NucleiImage string
+	SslImage    string
+	DockerNet   string
+	// Crtsh — поиск соседних сайтов цели через crt.sh/certspotter
+	// (Certificate Transparency) + TLS-сертификаты; 0 — только nmap/ZAP
+	// по цели.
 	Crtsh bool
 }
 
@@ -61,23 +56,17 @@ func initLocalTime(tz string) {
 
 func loadConfig() Config {
 	cfg := Config{
-		Listen:        envOr("SECSCAN_LISTEN", ":8510"),
-		DataDir:       envOr("SECSCAN_DATA", "./data"),
-		HostDataDir:   envOr("SECSCAN_HOST_DATA", ""),
-		User:          envOr("SECSCAN_USER", "admin"),
-		Pass:          envOr("SECSCAN_PASS", ""),
-		NmapImage:     envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
-		ZapImage:      envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
-		NucleiImage:   envOr("SECSCAN_NUCLEI_IMAGE", "projectdiscovery/nuclei:v2.9.14"),
-		SslImage:      envOr("SECSCAN_SSL_IMAGE", "drwetter/testssl.sh:latest"),
-		ZapEnabled:    envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
-		DockerNet:     envOr("SECSCAN_DOCKER_NETWORK", "host"),
-		Vulners:       envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
-		NseEnabled:    envOr("SECSCAN_NSE_ENABLED", "1") != "0",
-		UdpEnabled:    envOr("SECSCAN_UDP_ENABLED", "0") != "0",
-		SslEnabled:    envOr("SECSCAN_SSL_ENABLED", "1") != "0",
-		NucleiEnabled: envOr("SECSCAN_NUCLEI_ENABLED", "1") != "0",
-		Crtsh:         envOr("SECSCAN_CRTSH", "1") != "0",
+		Listen:      envOr("SECSCAN_LISTEN", ":8510"),
+		DataDir:     envOr("SECSCAN_DATA", "./data"),
+		HostDataDir: envOr("SECSCAN_HOST_DATA", ""),
+		User:        envOr("SECSCAN_USER", "admin"),
+		Pass:        envOr("SECSCAN_PASS", ""),
+		NmapImage:   envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
+		ZapImage:    envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
+		NucleiImage: envOr("SECSCAN_NUCLEI_IMAGE", "projectdiscovery/nuclei:v2.9.14"),
+		SslImage:    envOr("SECSCAN_SSL_IMAGE", "drwetter/testssl.sh:latest"),
+		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		Crtsh:       envOr("SECSCAN_CRTSH", "1") != "0",
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"
@@ -158,24 +147,6 @@ func main() {
 	mux.HandleFunc("GET /api/scans", auth.requireAuth(apiListScans(store)))
 	mux.HandleFunc("GET /api/scans/{id}", auth.requireAuth(apiGetScan(store)))
 	mux.HandleFunc("DELETE /api/scans", auth.requireAuth(apiDeleteScans(eng)))
-
-	// Настройки видов проверок (переключатели в UI)
-	mux.HandleFunc("GET /api/settings", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		set, _ := store.LoadSettings(eng.Defaults())
-		writeJSON(w, http.StatusOK, set)
-	}))
-	mux.HandleFunc("PUT /api/settings", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
-		var set Settings
-		if err := json.NewDecoder(r.Body).Decode(&set); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный JSON"})
-			return
-		}
-		if err := store.SaveSettings(set); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, set)
-	}))
 
 	// Отчёт и экспорт
 	mux.HandleFunc("GET /reports/{id}", auth.requireAuth(apiReport(store)))

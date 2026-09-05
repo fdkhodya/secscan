@@ -7,15 +7,17 @@
 
 ## Сканеры
 
-| Движок      | Статус       | Что даёт |
-|-------------|--------------|----------|
-| nmap (TCP)  | ✅ работает  | открытые TCP-порты, сервисы и версии |
-| nmap (UDP)  | ✅ по тумблеру | топ-50 UDP-портов (медленнее TCP) |
-| NSE vulners | ✅ по тумблеру | CVE+CVSS по версиям сервисов (nmap) |
-| NSE скрипты | ✅ по тумблеру | ssl-enum-ciphers (слабые TLS-протоколы/шифры, CRIME), http-methods, http-trace |
-| OWASP ZAP   | ✅ по тумблеру | анализ веб-приложений (zap-baseline, пассивные правила, русские описания) |
-| TLS/SSL     | ✅ по тумблеру | testssl.sh: протоколы, параметры сервера, security-заголовки https-сайтов |
-| nuclei      | ✅ по тумблеру | тысячи сигнатур-шаблонов (лёгкая замена OpenVAS/Greenbone) |
+| Движок      | Что даёт |
+|-------------|----------|
+| nmap (TCP)  | открытые TCP-порты, сервисы и версии; NSE vulners (CVE+CVSS) и доп. NSE-скрипты (ssl-enum-ciphers — слабые TLS-протоколы/шифры, CRIME; http-methods, http-trace) |
+| nmap (UDP)  | топ-50 UDP-портов (медленнее TCP) |
+| OWASP ZAP   | анализ веб-приложений (zap-baseline, пассивные правила, русские описания) |
+| TLS/SSL     | testssl.sh: протоколы, параметры сервера, security-заголовки https-сайтов |
+| nuclei      | тысячи сигнатур-шаблонов (лёгкая замена OpenVAS/Greenbone) |
+
+Все виды проверок выполняются при каждом скане. В главной странице панель
+«Ход сканирования» показывает статус каждого этапа выбранной задачи: серый —
+ждёт, жёлтый — выполняется, зелёный ✓ — готово, красный — ошибка этапа.
 
 Ввод цели: `192.168.7.7`, `example.com` или `https://example.com`.
 Если это URL — nmap сканирует хост, а ZAP/nuclei дополнительно проверяют
@@ -28,9 +30,9 @@
 `https://vault.fdkh.ru`, и `https://music.fdkh.ru`, и остальные, чьи A-записи
 ведут на этот IP).
 
-Виды проверок (кроме nmap TCP) включаются переключателями на главной
-странице. Настройки хранятся в `data/settings.json`, а в каждой задаче
-сохраняется снимок включённых проверок на момент запуска.
+Виды проверок включать не нужно — при каждом скане выполняются все (nmap
+TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить поиск соседних
+сайтов на IP можно env `SECSCAN_CRTSH=0`.
 
 ## Архитектура
 
@@ -57,10 +59,9 @@
 контейнера дублирует хостовый — см. docker-compose.yml).
 
 Образы по умолчанию: `instrumentisto/nmap:latest`,
-`ghcr.io/zaproxy/zaproxy:stable`, `projectdiscovery/nuclei:latest`,
-`drwetter/testssl.sh:latest` (переопределяются env `SECSCAN_*_IMAGE`).
-`SECSCAN_ZAP_ENABLED=0` и т.п. отключают движки по умолчанию (удобно при
-разработке, чтобы не тянуть большие образы). На Windows Docker Desktop задайте
+`ghcr.io/zaproxy/zaproxy:stable`, `projectdiscovery/nuclei:v2.9.14`
+(v3 падает SIGILL на старых CPU), `drwetter/testssl.sh:latest`
+(переопределяются env `SECSCAN_*_IMAGE`). На Windows Docker Desktop задайте
 `SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается.
 
 ## Разработка (без docker)
@@ -73,10 +74,9 @@
 ## API
 
     POST /api/scans        {"target":"https://example.com"}  → {"id":"..."}
-    GET  /api/scans        список задач
+    GET  /api/scans        список задач (статусы этапов — в поле stages)
     GET  /api/scans/{id}   задача (статус, находки)
     DELETE /api/scans      {"ids":["..."]} — удалить завершённые задачи (в UI: чекбоксы + «Удалить выбранные»)
-    GET  /api/settings     / PUT /api/settings — включённые виды проверок
     GET  /reports/{id}     HTML-отчёт
     GET  /reports/{id}/export.csv|.pdf — экспорт
 
@@ -86,7 +86,7 @@
 
     main.go          — конфиг, HTTP-сервер, маршруты
     auth.go          — сессии (логин/пароль из env)
-    store.go         — файловое хранилище задач и настроек
+    store.go         — файловое хранилище задач
     engine.go        — очередь и исполнение скана (nmap → udp → zap → ssl → nuclei)
     scanners.go      — docker-обёртка, nmap TCP/UDP (XML), доп. NSE-скрипты
     discovery.go     — поиск сайтов на IP цели (TLS SAN + crt.sh/certspotter), списки целей
