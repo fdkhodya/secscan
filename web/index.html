@@ -32,6 +32,16 @@
   .dot-done { background:#2ea86b; }
   .dot-error { background:#d64545; }
   @keyframes pulse { 50% { opacity:.4; } }
+  /* сводка результатов (как в отчёте) */
+  .counts { display:flex; gap:10px; flex-wrap:wrap; }
+  .chip { padding:7px 14px; border-radius:10px; font-size:13px; border:1px solid #262b36; min-width:86px; }
+  .chip b { font-size:17px; display:block; }
+  .sev-critical { background:#3a1212; border-color:#7f1d1d; color:#fecaca; }
+  .sev-high { background:#3a1f10; border-color:#7c2d12; color:#fed7aa; }
+  .sev-medium { background:#3a2e0e; border-color:#713f12; color:#fde68a; }
+  .sev-low { background:#12303a; border-color:#155e75; color:#a5f3fc; }
+  .sev-info { background:#1c212b; border-color:#374151; color:#cbd5e1; }
+  .chip-total { background:#1a1e26; border-color:#2c323d; color:#e6e6e6; }
   table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #20242e; }
   th { color:#8b93a3; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
@@ -76,6 +86,15 @@
     </div>
     <div class="prog-grid" id="prog-list"></div>
     <div class="hint">кружок: серый — ждёт, жёлтый — выполняется, зелёный ✓ — готово, красный — ошибка этапа</div>
+  </div>
+  <!-- сводка результатов выбранного скана -->
+  <div class="prog-panel" id="sum-panel" style="display:none">
+    <div class="prog-head">
+      <span class="p-title">Результаты сканирования</span>
+      <span class="p-target" id="sum-target"></span>
+      <span class="p-id" id="sum-id"></span>
+    </div>
+    <div class="counts" id="sum-counts"></div>
   </div>
   <table>
     <thead><tr><th class="chk"><input type="checkbox" id="sel-all" title="Выбрать завершённые"></th><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
@@ -138,6 +157,23 @@ function selectJob(job) {
     tr.classList.toggle('sel-row', tr.dataset.id === job.id);
   });
   renderProg(job);
+  renderSum(job);
+}
+// сводка по критичности выбранного скана (цвета как в отчёте)
+function renderSum(job) {
+  const panel = document.getElementById('sum-panel');
+  if (!job) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  document.getElementById('sum-target').textContent = job.target;
+  document.getElementById('sum-id').textContent = job.id;
+  const order = ['critical', 'high', 'medium', 'low', 'info'];
+  const labels = {critical:'Критично', high:'Высокая', medium:'Средняя', low:'Низкая', info:'Информация'};
+  const c = {critical:0, high:0, medium:0, low:0, info:0};
+  (job.findings || []).forEach(f => { if (c[f.severity] !== undefined) c[f.severity]++; });
+  const total = (job.findings || []).length;
+  document.getElementById('sum-counts').innerHTML =
+    order.map(s => `<div class="chip sev-${s}"><b>${c[s]}</b>${labels[s]}</div>`).join('') +
+    `<div class="chip chip-total"><b>${total}</b>Всего</div>`;
 }
 function renderProg(job) {
   const panel = document.getElementById('prog-panel');
@@ -160,7 +196,7 @@ async function refresh() {
     const r = await fetch('/api/scans');
     const jobs = await r.json();
     const tb = document.getElementById('rows');
-    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">Задач пока нет</td></tr>'; updateSelected(); renderProg(null); return; }
+    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">Задач пока нет</td></tr>'; updateSelected(); renderProg(null); renderSum(null); return; }
     // активная задача: прежняя (если ещё в списке) или самая свежая
     const wasActive = activeJob ? jobs.find(j => j.id === activeJob.id) : null;
     if (!wasActive) activeJob = jobs[0];
