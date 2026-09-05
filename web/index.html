@@ -44,13 +44,13 @@
     <input id="target" placeholder="IP-адрес, домен или http(s)://url — например 192.168.7.7 или https://example.com" autocomplete="off">
     <button id="run" onclick="startScan()">Сканировать</button>
   </div>
-  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (через bridge). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
+  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (Greenbone, тот же docker-compose). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
   <div id="err"></div>
   <div class="settings">
     <span class="s-title">Виды проверок:</span>
     <label class="sw"><input type="checkbox" id="sw-nmap" checked disabled> nmap (порты/сервисы)</label>
     <label class="sw"><input type="checkbox" id="sw-zap"> OWASP ZAP (веб)</label>
-    <label class="sw"><input type="checkbox" id="sw-openvas"> OpenVAS</label>
+    <label class="sw"><input type="checkbox" id="sw-openvas"> OpenVAS (Greenbone)</label>
     <label class="sw"><input type="checkbox" id="sw-vulners"> NSE vulners (CVE по nmap)</label>
   </div>
   <table>

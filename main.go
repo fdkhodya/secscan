@@ -16,19 +16,22 @@ import (
 var webFS embed.FS
 
 type Config struct {
-	Listen       string
-	DataDir      string
-	HostDataDir  string
-	User         string
-	Pass         string
-	NmapImage    string
-	ZapImage     string
-	ZapEnabled   bool
-	DockerNet    string
-	NmapVulners  bool
-	OpenVASMode  string // off | bridge
-	OpenVASURL   string
-	OpenVASToken string
+	Listen      string
+	DataDir     string
+	HostDataDir string
+	User        string
+	Pass        string
+	NmapImage   string
+	ZapImage    string
+	ZapEnabled  bool
+	DockerNet   string
+	NmapVulners bool
+	// Greenbone (OpenVAS) — gvmd в том же docker-compose (профиль greenbone):
+	// GMP по unix-сокету /run/gvmd/gvmd.sock (общий volume gvmd_socket_vol).
+	OpenVASEnabled bool
+	GmpSocket      string
+	GmpUser        string
+	GmpPass        string
 }
 
 func envOr(key, def string) string {
@@ -40,19 +43,22 @@ func envOr(key, def string) string {
 
 func loadConfig() Config {
 	cfg := Config{
-		Listen:       envOr("SECSCAN_LISTEN", ":8510"),
-		DataDir:      envOr("SECSCAN_DATA", "./data"),
-		HostDataDir:  envOr("SECSCAN_HOST_DATA", ""),
-		User:         envOr("SECSCAN_USER", "admin"),
-		Pass:         envOr("SECSCAN_PASS", ""),
-		NmapImage:    envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
-		ZapImage:     envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
-		ZapEnabled:   envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
-		DockerNet:    envOr("SECSCAN_DOCKER_NETWORK", "host"),
-		NmapVulners:  envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
-		OpenVASMode:  envOr("SECSCAN_OPENVAS_MODE", "off"),
-		OpenVASURL:   envOr("SECSCAN_OPENVAS_URL", ""),
-		OpenVASToken: envOr("SECSCAN_OPENVAS_TOKEN", ""),
+		Listen:      envOr("SECSCAN_LISTEN", ":8510"),
+		DataDir:     envOr("SECSCAN_DATA", "./data"),
+		HostDataDir: envOr("SECSCAN_HOST_DATA", ""),
+		User:        envOr("SECSCAN_USER", "admin"),
+		Pass:        envOr("SECSCAN_PASS", ""),
+		NmapImage:   envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
+		ZapImage:    envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
+		ZapEnabled:  envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
+		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		NmapVulners: envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
+		// Greenbone вкл. только там, где запущен стек (см. docker-compose.yml,
+		// профиль greenbone). Пароль — SECSCAN_GMP_PASS из .env.
+		OpenVASEnabled: envOr("SECSCAN_OPENVAS_ENABLED", "0") != "0",
+		GmpSocket:      envOr("SECSCAN_GMP_SOCKET", "/run/gvmd/gvmd.sock"),
+		GmpUser:        envOr("SECSCAN_GMP_USER", "admin"),
+		GmpPass:        envOr("SECSCAN_GMP_PASS", ""),
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"

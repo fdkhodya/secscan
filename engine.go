@@ -24,7 +24,7 @@ func NewEngine(store *Store, cfg *Config) *Engine {
 		cfg:   cfg,
 		defs: Settings{
 			ZapEnabled:     cfg.ZapEnabled,
-			OpenVASEnabled: cfg.OpenVASMode == "bridge" && cfg.OpenVASURL != "",
+			OpenVASEnabled: cfg.OpenVASEnabled,
 			Vulners:        cfg.NmapVulners,
 		},
 		queue: make(chan string, 10),
@@ -152,18 +152,30 @@ func (e *Engine) run(id string) {
 		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
 	}
 
-	// 3) OpenVAS (только если включён переключателем и задан адрес моста)
-	if j.ScanOpenVAS && e.cfg.OpenVASMode == "bridge" && e.cfg.OpenVASURL != "" {
-		e.set(j, "running", "openvas: сканирование (мост "+e.cfg.OpenVASURL+")", "")
-		findings, err := openvasBridgeScan(ctx, e.cfg.OpenVASURL, e.cfg.OpenVASToken, j.Host)
-		if err != nil {
-			e.set(j, "running", "openvas: ошибка — "+err.Error(), "")
-		} else {
-			j.Findings = append(j.Findings, findings...)
-			_ = e.store.SaveJob(j)
+	// 3) OpenVAS (Greenbone в том же docker-compose, профиль greenbone):
+	//    GMP к gvmd по unix-сокету — отдельным контейнером-мостом больше
+	//    не пользуемся. Ошибки этапа некритичны: nmap/zap-находки остаются.
+	if j.ScanOpenVAS {
+		switch {
+		case e.cfg.GmpPass == "":
+			e.set(j, "running", "openvas: включён, но не задан SECSCAN_GMP_PASS — пропущен", "")
+		case !socketExists(e.cfg.GmpSocket):
+			e.set(j, "running", "openvas: сокет gvmd недоступен ("+e.cfg.GmpSocket+") — стек Greenbone не запущен — пропущен", "")
+		default:
+			// У OpenVAS собственный бюджет: полный скан хоста идёт десятки
+			// минут, nmap/zap живут в рамках общего ctx (90 мин).
+			ctxOv, cancelOv := context.WithTimeout(context.Background(), 8*time.Hour)
+			findings, err := openvasScan(ctxOv, e.cfg, j.ID, j.Host, func(stage string) {
+				e.set(j, "running", stage, "")
+			})
+			cancelOv()
+			if err != nil {
+				e.set(j, "running", "openvas: ошибка — "+err.Error(), "")
+			} else {
+				j.Findings = append(j.Findings, findings...)
+				_ = e.store.SaveJob(j)
+			}
 		}
-	} else if j.ScanOpenVAS {
-		e.set(j, "running", "openvas: включён, но bridge не настроен (SECSCAN_OPENVAS_MODE/URL) — пропущен", "")
 	} else {
 		e.set(j, "running", "openvas: выключен переключателем", "")
 	}
