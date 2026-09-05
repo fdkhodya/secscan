@@ -325,15 +325,20 @@ func zapScan(ctx context.Context, image, network, hostDataDir, jobID, targetURL 
 			case 1:
 				sev = SevLow
 			}
+			title, desc, rem := a.Alert, stripTags(a.Desc), stripTags(a.Solution)
+			if tr, ok := zapI18nFor(a.Alert); ok {
+				// правило переведено — выдаём русский текст целиком
+				title, desc, rem = tr.Title, tr.Desc, tr.Sol
+			}
 			f := Finding{
 				ID:          "zap-" + slug(a.Alert),
 				Source:      "zap",
 				Severity:    sev,
 				Host:        site.Name,
 				URL:         site.Name,
-				Title:       a.Alert,
-				Description: stripTags(a.Desc),
-				Remediation: stripTags(a.Solution),
+				Title:       title,
+				Description: desc,
+				Remediation: rem,
 				Confidence:  a.Confidence,
 			}
 			if len(a.Instances) > 0 {
