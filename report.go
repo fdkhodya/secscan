@@ -41,6 +41,8 @@ var reportFuncs = template.FuncMap{
 		}
 	},
 	"join": strings.Join,
+	// ts — локальное время (SECSCAN_TZ) из RFC3339-строки
+	"ts": formatTS,
 }
 
 var reportTmpl *template.Template

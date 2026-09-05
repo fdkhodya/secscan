@@ -45,10 +45,10 @@ func exportPDF(j *Job) ([]byte, error) {
 	pdf.SetTextColor(71, 85, 105)
 	meta := []string{
 		fmt.Sprintf("Цель: %s", j.Target),
-		fmt.Sprintf("ID: %s   ·   статус: %s   ·   создан: %s", j.ID, j.Status, j.CreatedAt),
+		fmt.Sprintf("ID: %s   ·   статус: %s   ·   создан: %s", j.ID, j.Status, formatTS(j.CreatedAt)),
 	}
 	if j.DoneAt != "" {
-		meta = append(meta, "Завершён: "+j.DoneAt)
+		meta = append(meta, "Завершён: "+formatTS(j.DoneAt))
 	}
 	if j.Error != "" {
 		meta = append(meta, "Ошибки: "+j.Error)

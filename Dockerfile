@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /secscan .
 
 # ---- runtime ----
 FROM alpine:3.20
-RUN apk add --no-cache docker-cli ca-certificates
+RUN apk add --no-cache docker-cli ca-certificates tzdata
 COPY --from=build /secscan /usr/local/bin/secscan
 ENV SECSCAN_DATA=/data \
     SECSCAN_LISTEN=:8510

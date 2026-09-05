@@ -129,6 +129,16 @@ func (s *Store) ListJobs() ([]*Job, error) {
 
 func nowRFC() string { return time.Now().Format(time.RFC3339) }
 
+// formatTS приводит RFC3339-строку к локальному времени процесса (SECSCAN_TZ)
+// в виде "02.01.2006 15:04". Непарсибельное — возвращает как есть.
+func formatTS(s string) string {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.In(time.Local).Format("02.01.2006 15:04")
+}
+
 func newJobID() string {
 	return fmt.Sprintf("%s-%06d", time.Now().Format("20060102-150405"), time.Now().Nanosecond()/1000)
 }

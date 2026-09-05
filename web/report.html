@@ -45,8 +45,8 @@
   </span>{{ end }}
   <h1>{{ .Job.Target }}</h1>
   <div class="meta">
-    ID: {{ .Job.ID }} · статус: {{ .Job.Status }} · создан: {{ .Job.CreatedAt }}
-    {{ if .Job.DoneAt }} · завершён: {{ .Job.DoneAt }}{{ end }}
+    ID: {{ .Job.ID }} · статус: {{ .Job.Status }} · создан: {{ ts .Job.CreatedAt }}
+    {{ if .Job.DoneAt }} · завершён: {{ ts .Job.DoneAt }}{{ end }}
     {{ if .Job.Error }} · <span style="color:#f87171">ошибка: {{ .Job.Error }}</span>{{ end }}
   </div>
 </header>

@@ -51,7 +51,6 @@
     <input id="target" placeholder="IP-адрес, домен или http(s)://url — например 192.168.7.7 или https://example.com" autocomplete="off">
     <button id="run" onclick="startScan()">Сканировать</button>
   </div>
-  <div class="hint">nmap (порты/сервисы) + OWASP ZAP (веб) + OpenVAS (Greenbone, тот же docker-compose). Отчёт сортируется от самых критичных уязвимостей к менее критичным.</div>
   <div id="err"></div>
   <div class="settings">
     <span class="s-title">Виды проверок:</span>
@@ -89,6 +88,14 @@ async function startScan() {
   refresh();
 }
 function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// локальное время браузера из ISO-строки (сервер хранит RFC3339)
+function fmtLocal(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getDate()) + '.' + p(d.getMonth() + 1) + '.' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 async function refresh() {
   try {
     const r = await fetch('/api/scans');
@@ -106,7 +113,7 @@ async function refresh() {
         <td>${esc(j.id)}</td><td>${esc(j.target)}</td>
         <td><span class="st st-${esc(j.status)}">${esc(j.status)}</span></td>
         <td>${esc(j.stage || '')}${err ? ' <span style="color:#f87171">'+esc(j.error||'')+'</span>' : ''}</td>
-        <td>${esc(j.created_at)}</td><td>${report}</td></tr>`;
+        <td>${fmtLocal(j.created_at)}</td><td>${report}</td></tr>`;
     }).join('');
     updateSelected();
   } catch(e) {}

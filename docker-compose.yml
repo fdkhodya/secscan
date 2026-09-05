@@ -43,6 +43,8 @@ services:
       SECSCAN_GMP_SOCKET: /run/gvmd/gvmd.sock
       SECSCAN_GMP_USER: ${SECSCAN_GMP_USER:-admin}
       SECSCAN_GMP_PASS: ${SECSCAN_GMP_PASS:-}
+      # локальный часовой пояс (времена задач: список, отчёты, PDF)
+      SECSCAN_TZ: ${SECSCAN_TZ:-Asia/Yekaterinburg}
     volumes:
       - ./data:/data
       # Хостовый каталог данных дублируется в контейнер по пути

@@ -41,6 +41,21 @@ func envOr(key, def string) string {
 	return def
 }
 
+// initLocalTime задаёт часовой пояс процесса (SECSCAN_TZ): времена задач
+// хранятся в RFC3339 с локальным смещением и показываются в локальном времени
+// (список/отчёты/PDF). По умолчанию Asia/Yekaterinburg (UTC+5).
+func initLocalTime(tz string) {
+	if tz == "" {
+		return
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		log.Printf("ВНИМАНИЕ: неизвестный часовой пояс %q — остаюсь на UTC: %v", tz, err)
+		return
+	}
+	time.Local = loc
+}
+
 func loadConfig() Config {
 	cfg := Config{
 		Listen:      envOr("SECSCAN_LISTEN", ":8510"),
@@ -80,6 +95,7 @@ var (
 )
 
 func main() {
+	initLocalTime(envOr("SECSCAN_TZ", "Asia/Yekaterinburg"))
 	cfg := loadConfig()
 
 	store, err := NewStore(cfg.DataDir)
