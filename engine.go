@@ -96,7 +96,7 @@ func (e *Engine) run(id string) {
 	defer cancel()
 
 	// 1) nmap
-	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, j.Host, e.cfg.HostDataDir)
+	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir)
 	if err != nil {
 		msg := fmt.Sprintf("этап nmap: %v", err)
 		e.set(j, "running", "nmap: ошибка", msg)
@@ -114,7 +114,7 @@ func (e *Engine) run(id string) {
 		if len(urls) > 0 {
 			e.set(j, "running", "zap: активное сканирование веб-приложения", "")
 			for _, u := range urls {
-				findings, err := zapScan(ctx, e.cfg.ZapImage, e.cfg.HostDataDir, j.ID, u)
+				findings, err := zapScan(ctx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
 				if err != nil {
 					msg := fmt.Sprintf("этап zap (%s): %v", u, err)
 					e.set(j, "running", "zap: ошибка", msg)

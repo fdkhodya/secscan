@@ -48,6 +48,26 @@
 `ghcr.io/zaproxy/zaproxy:stable` (переопределяются env `SECSCAN_NMAP_IMAGE`,
 `SECSCAN_ZAP_IMAGE`). `SECSCAN_ZAP_ENABLED=0` отключает ZAP (удобно при
 разработке, не тянуть образ ~1.5 ГБ).
+`SECSCAN_DOCKER_NETWORK=host` (по умолчанию) — сканеры в сети хоста; на
+Docker Desktop задайте пустое значение (`SECSCAN_DOCKER_NETWORK=`) — будет
+обычная bridge-сеть (на Windows `--network host` не поддерживается).
+
+## Запуск на Windows (мощная машина для полных сканов)
+
+Скомпилированный бинарник `secscan.exe` (amd64) запускается локально:
+
+    set SECSCAN_USER=admin
+    set SECSCAN_PASS=ваш-пароль
+    set SECSCAN_DATA=C:\secscan\data
+    set SECSCAN_HOST_DATA=C:\secscan\data
+    set SECSCAN_DOCKER_NETWORK=
+    secscan.exe            # http://127.0.0.1:8510
+
+Требования: установленный Docker Desktop (Linux-контейнеры, запущен) с CLI в
+PATH. При первом веб-скане подтянется образ ZAP (~1.5 ГБ). Для сканирования
+самого Windows-хоста указывайте его LAN-IP (из bridge-контейнера localhost —
+это VM Docker). Greenbone/OpenVAS на этой машине — отдельный шаг (docker
+compose + интеграция движка в secscan).
 
 ## API
 

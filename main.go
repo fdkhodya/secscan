@@ -24,6 +24,7 @@ type Config struct {
 	NmapImage   string
 	ZapImage    string
 	ZapEnabled  bool
+	DockerNet   string
 }
 
 func envOr(key, def string) string {
@@ -43,6 +44,7 @@ func loadConfig() Config {
 		NmapImage:   envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
 		ZapImage:    envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
 		ZapEnabled:  envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
+		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"

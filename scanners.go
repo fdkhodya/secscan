@@ -18,8 +18,14 @@ import (
 
 // ---------- общий запуск docker-контейнеров-сканеров ----------
 
-func runDocker(ctx context.Context, image string, mounts []string, cmdArgs []string) (stdout, stderr string, err error) {
-	args := []string{"run", "--rm", "--network", "host"}
+func runDocker(ctx context.Context, image, network string, mounts []string, cmdArgs []string) (stdout, stderr string, err error) {
+	args := []string{"run", "--rm"}
+	if network == "host" {
+		// Linux: сеть хоста (сканирование localhost и LAN как с самого хоста).
+		// Docker Desktop (Windows/macOS): --network host недоступен —
+		// задайте SECSCAN_DOCKER_NETWORK= (пусто) для bridge-сети.
+		args = append(args, "--network", "host")
+	}
 	for _, m := range mounts {
 		args = append(args, "-v", m)
 	}
@@ -72,12 +78,12 @@ type nmapResult struct {
 }
 
 // nmapScan возвращает находки и список открытых веб-портов.
-func nmapScan(ctx context.Context, image, host string, hostDataDir string) ([]Finding, []int, error) {
+func nmapScan(ctx context.Context, image, network, host, hostDataDir string) ([]Finding, []int, error) {
 	args := []string{
 		"-Pn", "-sV", "-T4", "--top-ports", "1000", "--open",
 		"--host-timeout", "15m", "-oX", "-", host,
 	}
-	out, errOut, err := runDocker(ctx, image, nil, args)
+	out, errOut, err := runDocker(ctx, image, network, nil, args)
 	if err != nil {
 		// nmap может вернуть ненулевой код при частичном скане (rc>0),
 		// XML при этом часто валиден — пробуем распарсить.
@@ -264,7 +270,7 @@ type zapInstance struct {
 }
 
 // zapScan запускает zap-baseline против одного URL.
-func zapScan(ctx context.Context, image, hostDataDir, jobID, targetURL string) ([]Finding, error) {
+func zapScan(ctx context.Context, image, network, hostDataDir, jobID, targetURL string) ([]Finding, error) {
 	workDir := filepath.Join(hostDataDir, "work", jobID)
 	if err := os.MkdirAll(workDir, 0o777); err != nil {
 		return nil, err
@@ -276,7 +282,7 @@ func zapScan(ctx context.Context, image, hostDataDir, jobID, targetURL string) (
 		"zap-baseline.py", "-t", targetURL,
 		"-J", "/zap/wrk/zap.json",
 	}
-	_, errOut, err := runDocker(ctx, image, []string{mount}, args)
+	_, errOut, err := runDocker(ctx, image, network, []string{mount}, args)
 	if err != nil {
 		return nil, fmt.Errorf("zap: %v: %s", err, tail(errOut, 2000))
 	}
