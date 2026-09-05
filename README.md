@@ -1,42 +1,43 @@
 # secscan
 
-Локальный сканер уязвимостей с веб-интерфейсом. Вводите IP-адрес или URL — на выходе отчёт
+Локальный сканер уязвимостей с веб-интерфейсом (по мотивам hostedscan.com — но
+локально, без регистрации и оплат). Вводите IP-адрес или URL — на выходе отчёт
 с уязвимостями, отсортированными от самых критичных к менее критичным, и с
 описанием, как исправить.
 
 ## Сканеры
 
-| Движок   | Статус       | Что даёт |
-|----------|--------------|----------|
-| nmap     | ✅ работает  | открытые порты, сервисы и версии, NSE-скрипты (vulners: CVE+CVSS) |
-| OWASP ZAP| ✅ работает  | активное сканирование веб-приложений (zap-baseline) |
-| OpenVAS  | ✅ в составе | Greenbone Community Edition в том же docker-compose (профиль `greenbone`); secscan гоняет скан по GMP через общий unix-сокет gvmd |
+| Движок      | Статус       | Что даёт |
+|-------------|--------------|----------|
+| nmap (TCP)  | ✅ работает  | открытые TCP-порты, сервисы и версии |
+| nmap (UDP)  | ✅ по тумблеру | топ-50 UDP-портов (медленнее TCP) |
+| NSE vulners | ✅ по тумблеру | CVE+CVSS по версиям сервисов (nmap) |
+| NSE скрипты | ✅ по тумблеру | ssl-enum-ciphers (слабые TLS-протоколы/шифры, CRIME), http-methods, http-trace |
+| OWASP ZAP   | ✅ по тумблеру | анализ веб-приложений (zap-baseline, пассивные правила, русские описания) |
+| TLS/SSL     | ✅ по тумблеру | testssl.sh: протоколы, параметры сервера, security-заголовки https-сайтов |
+| nuclei      | ✅ по тумблеру | тысячи сигнатур-шаблонов (лёгкая замена OpenVAS/Greenbone) |
 
 Ввод цели: `192.168.7.7`, `example.com` или `https://example.com`.
-Если это URL — nmap сканирует хост, а ZAP дополнительно проверяет веб-приложение.
-Для «голого» IP (или домена без схемы) secscan дополнительно находит другие
-сайты на этом же IP — по TLS-сертификатам (SAN) и через публичный реестр
-сертификатов crt.sh (отключается `SECSCAN_CRTSH=0`) — и за один запуск
-проверяет каждый: IP по nmap, все найденные домены по http/https через ZAP
-(например, ввели IP, а проверятся и `https://vault.fdkh.ru`, и
-`https://music.fdkh.ru`, и остальные, чьи A-записи ведут на этот IP).
+Если это URL — nmap сканирует хост, а ZAP/nuclei дополнительно проверяют
+веб-приложение. Для «голого» IP (или домена без схемы) secscan дополнительно
+находит другие сайты на этом же IP — по TLS-сертификатам (SAN) и через
+публичный реестр сертификатов crt.sh (отключается `SECSCAN_CRTSH=0`) — и за
+один запуск проверяет каждый: IP по nmap, все найденные домены по http/https
+через ZAP/nuclei и testssl (например, ввели IP, а проверятся и
+`https://vault.fdkh.ru`, и `https://music.fdkh.ru`, и остальные, чьи A-записи
+ведут на этот IP).
 
-Виды проверок (OWASP ZAP, OpenVAS, NSE vulners) включаются переключателями на
-главной странице; nmap выполняется всегда. Настройки хранятся в
-`data/settings.json`, а в каждой задаче сохраняется снимок включённых проверок
-на момент запуска.
+Виды проверок (кроме nmap TCP) включаются переключателями на главной
+странице. Настройки хранятся в `data/settings.json`, а в каждой задаче
+сохраняется снимок включённых проверок на момент запуска.
 
 ## Архитектура
 
 - Один Go-сервис (веб + очередь задач + агрегация отчётов), файловое хранилище
   задач в `data/jobs/*.json` (без СУБД).
-- Сканеры nmap и ZAP выполняются как разовые docker-контейнеры через docker.sock
-  хоста (`--network host` на Linux).
-- Greenbone-стек (gvmd, postgres, openvas, notus, GSA…) — сервисы **этого же**
-  docker-compose-файла под профилем `greenbone`. secscan подключается к gvmd по
-  протоколу GMP через общий volume `gvmd_socket_vol` (unix-сокет
-  `/run/gvmd/gvmd.sock`) — как штатные gsad/gvm-tools. Никаких отдельных машин,
-  TCP-портов GMP и «мостов».
+- Все сканеры выполняются как разовые docker-контейнеры через docker.sock
+  хоста (`--network host` на Linux); образы подтягиваются при первом
+  использовании. Шаблоны nuclei кэшируются в `data/nuclei-templates`.
 - Находки всех сканеров приводятся к единой модели (severity:
   critical/high/medium/low/info, CVE, CVSS, описание, рекомендация «как
   исправить», доказательства). Отчёт сортируется по критичности.
@@ -49,49 +50,24 @@
     docker compose up -d --build
     # http://<server>:8510
 
-Контейнеру нужен доступ к `/var/run/docker.sock` (запуск сканеров nmap/ZAP) и
-bind `./data` на хосте — рабочие каталоги сканеров монтируются по
-`SECSCAN_HOST_DATA` (по умолчанию `/opt/projects/secscan/data`).
+Контейнеру нужен доступ к `/var/run/docker.sock` (запуск сканеров) и bind
+`./data` на хосте — рабочие каталоги сканеров монтируются по
+`SECSCAN_HOST_DATA` (по умолчанию `/opt/projects/secscan/data`; путь внутри
+контейнера дублирует хостовый — см. docker-compose.yml).
 
-### Greenbone/OpenVAS (тот же compose, профиль greenbone)
-
-Требования: Linux-хост с ~4–8 ГБ свободной RAM и ~20–60 ГБ диска (фиды
-скачиваются при первом старте; сам первичный синк занимает заметное время).
-
-    docker compose --profile greenbone up -d --build     # весь стек одной командой
-    docker compose logs -f gvmd openvasd                 # следить за первичным синком фидов
-
-Первый старт:
-
-1. Дождитесь готовности gvmd (фиды, миграции БД).
-2. Задайте пароль администратора gvmd (по умолчанию admin/admin — небезопасно):
-       docker compose exec -u gvmd gvmd gvmd --user=admin --new-password='ВАШ_ПАРОЛЬ'
-3. Тот же пароль пропишите в `.env`: `SECSCAN_GMP_PASS=ВАШ_ПАРОЛЬ` и включите
-   OpenVAS (`SECSCAN_OPENVAS_ENABLED=1`), затем пересоздайте secscan:
-       docker compose up -d --build
-4. На веб-морде secscan включите переключатель «OpenVAS (Greenbone)».
-
-Веб-интерфейс GSA (Greenbone Security Assistant) — дополнительно, для ручного
-управления: https://127.0.0.1 (сертификат самоподписанный). Чтобы открыть GSA
-с других машин, задайте `GC_GSA_PORT=0.0.0.0:8443` (и, при желании,
-`GC_GSA_API_PORT=0.0.0.0:9392`).
-
-Остановка: `docker compose --profile greenbone down` (данные — в docker-volumes
-`*_data_vol`, сохраняются). Удаление данных: `docker compose --profile greenbone down -v`.
+Образы по умолчанию: `instrumentisto/nmap:latest`,
+`ghcr.io/zaproxy/zaproxy:stable`, `projectdiscovery/nuclei:latest`,
+`drwetter/testssl.sh:latest` (переопределяются env `SECSCAN_*_IMAGE`).
+`SECSCAN_ZAP_ENABLED=0` и т.п. отключают движки по умолчанию (удобно при
+разработке, чтобы не тянуть большие образы). На Windows Docker Desktop задайте
+`SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается.
 
 ## Разработка (без docker)
 
     export SECSCAN_USER=admin SECSCAN_PASS=secret
     go build -o secscan . && ./secscan
 
-Образы сканеров по умолчанию: `instrumentisto/nmap:latest`,
-`ghcr.io/zaproxy/zaproxy:stable` (переопределяются env `SECSCAN_NMAP_IMAGE`,
-`SECSCAN_ZAP_IMAGE`). `SECSCAN_ZAP_ENABLED=0` отключает ZAP (удобно при
-разработке, не тянуть образ ~1.5 ГБ).
-
-GMP-клиент (gmp.go) покрыт тестом на mock-сокете (`go test ./...`) — проверены
-фрейминг запросов и разбор ответов gvmd; полная проверка движка OpenVAS —
-при первом запуске стека greenbone на машине с достаточной RAM.
+Тесты: `go test ./...` (GMP/OpenVAS-код удалён — вместо него nuclei).
 
 ## API
 
@@ -110,11 +86,14 @@ GMP-клиент (gmp.go) покрыт тестом на mock-сокете (`go 
     main.go          — конфиг, HTTP-сервер, маршруты
     auth.go          — сессии (логин/пароль из env)
     store.go         — файловое хранилище задач и настроек
-    engine.go        — очередь и исполнение скана (nmap → zap → openvas)
-    scanners.go      — docker-обёртка, nmap (XML), ZAP (baseline JSON)
-    gmp.go           — GMP-клиент к gvmd (unix-сокет): запуск скана, результаты
+    engine.go        — очередь и исполнение скана (nmap → udp → zap → ssl → nuclei)
+    scanners.go      — docker-обёртка, nmap TCP/UDP (XML), доп. NSE-скрипты
+    discovery.go     — поиск сайтов на IP цели (TLS SAN + crt.sh), списки целей
+    ssl.go           — TLS/SSL-анализ (testssl.sh, JSON)
+    nuclei.go        — сигнатурный скан (nuclei, JSONL)
+    zap_i18n.go      — русские переводы правил OWASP ZAP
     remediation.go   — база рекомендаций «как исправить»
     models.go        — модель находки/задачи, сортировка по критичности
     report.go        — рендер HTML-отчёта
     web/             — шаблоны (login, index, report)
-    docker-compose.yml — secscan + Greenbone Community Edition (профиль greenbone)
+    docker-compose.yml — сервис secscan (сканеры — разовые контейнеры)

@@ -54,10 +54,13 @@
   <div id="err"></div>
   <div class="settings">
     <span class="s-title">Виды проверок:</span>
-    <label class="sw"><input type="checkbox" id="sw-nmap" checked disabled> nmap (порты/сервисы)</label>
+    <label class="sw"><input type="checkbox" id="sw-nmap" checked disabled> nmap (TCP-порты/сервисы)</label>
+    <label class="sw"><input type="checkbox" id="sw-udp"> UDP-порты</label>
     <label class="sw"><input type="checkbox" id="sw-zap"> OWASP ZAP (веб)</label>
-    <label class="sw"><input type="checkbox" id="sw-openvas"> OpenVAS (Greenbone)</label>
-    <label class="sw"><input type="checkbox" id="sw-vulners"> NSE vulners (CVE по nmap)</label>
+    <label class="sw"><input type="checkbox" id="sw-nuclei"> nuclei (сигнатуры)</label>
+    <label class="sw"><input type="checkbox" id="sw-ssl"> TLS/SSL (testssl)</label>
+    <label class="sw"><input type="checkbox" id="sw-vulners"> NSE vulners (CVE)</label>
+    <label class="sw"><input type="checkbox" id="sw-nse"> NSE скрипты (TLS/HTTP)</label>
   </div>
   <table>
     <thead><tr><th class="chk"><input type="checkbox" id="sel-all" title="Выбрать завершённые"></th><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
@@ -150,27 +153,36 @@ document.getElementById('del-sel').addEventListener('click', async () => {
 });
 
 // ---- настройки (переключатели) ----
-let settings = {zap_enabled:false, openvas_enabled:false, vulners:false};
+let settings = {zap_enabled:false, nuclei_enabled:false, udp_enabled:false, nse_enabled:false, vulners:false, ssl_enabled:false};
 async function loadSettings() {
   try {
     const r = await fetch('/api/settings');
     settings = await r.json();
     document.getElementById('sw-zap').checked = !!settings.zap_enabled;
-    document.getElementById('sw-openvas').checked = !!settings.openvas_enabled;
+    document.getElementById('sw-nuclei').checked = !!settings.nuclei_enabled;
+    document.getElementById('sw-udp').checked = !!settings.udp_enabled;
+    document.getElementById('sw-nse').checked = !!settings.nse_enabled;
     document.getElementById('sw-vulners').checked = !!settings.vulners;
+    document.getElementById('sw-ssl').checked = !!settings.ssl_enabled;
   } catch(e) {}
 }
 async function saveSettings() {
   settings.zap_enabled = document.getElementById('sw-zap').checked;
-  settings.openvas_enabled = document.getElementById('sw-openvas').checked;
+  settings.nuclei_enabled = document.getElementById('sw-nuclei').checked;
+  settings.udp_enabled = document.getElementById('sw-udp').checked;
+  settings.nse_enabled = document.getElementById('sw-nse').checked;
   settings.vulners = document.getElementById('sw-vulners').checked;
+  settings.ssl_enabled = document.getElementById('sw-ssl').checked;
   try {
     await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(settings)});
   } catch(e) {}
 }
 document.getElementById('sw-zap').addEventListener('change', saveSettings);
-document.getElementById('sw-openvas').addEventListener('change', saveSettings);
+document.getElementById('sw-nuclei').addEventListener('change', saveSettings);
+document.getElementById('sw-udp').addEventListener('change', saveSettings);
+document.getElementById('sw-nse').addEventListener('change', saveSettings);
 document.getElementById('sw-vulners').addEventListener('change', saveSettings);
+document.getElementById('sw-ssl').addEventListener('change', saveSettings);
 loadSettings();
 </script>
 </body>

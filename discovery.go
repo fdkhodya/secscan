@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -193,9 +194,10 @@ func crtshNames(ctx context.Context, domain string) []string {
 	return out
 }
 
-// zapTargetList собирает полный список URL для ZAP: цель job'а (IP/домен)
-// + найденные сайты на том же IP (по открытым портам 80/443).
-func zapTargetList(ctx context.Context, cfg *Config, job *Job, webPorts []int) []string {
+// webTargetList собирает полный список URL для веб-сканеров (ZAP, nuclei):
+// цель job'а (IP/домен) + найденные сайты на том же IP (по открытым портам
+// 80/443).
+func webTargetList(ctx context.Context, cfg *Config, job *Job, webPorts []int) []string {
 	urls := zapTargets(job, webPorts)
 	// расширяем соседями только когда цель задана без схемы (IP или домен):
 	// явный URL пользователь указал сам — сканируем только его
@@ -210,6 +212,57 @@ func zapTargetList(ctx context.Context, cfg *Config, job *Job, webPorts []int) [
 		}
 	}
 	return mergeURLs(urls)
+}
+
+// zapTargets — базовые URL цели по открытым веб-портам (или явный URL).
+func zapTargets(j *Job, webPorts []int) []string {
+	if j.URL != "" {
+		return []string{j.URL}
+	}
+	var out []string
+	for _, p := range webPorts {
+		scheme := "http"
+		if p == 443 || p == 8443 || p == 9443 {
+			scheme = "https"
+		}
+		out = append(out, fmt.Sprintf("%s://%s", scheme, joinHostPort(j.Host, p)))
+	}
+	return out
+}
+
+// sslTargetList — https-цели для TLS/SSL-анализа (testssl.sh).
+func sslTargetList(ctx context.Context, cfg *Config, job *Job, webPorts []int) []string {
+	var out []string
+	if job.URL != "" {
+		if strings.HasPrefix(job.URL, "https://") {
+			out = append(out, job.URL)
+		}
+		return mergeURLs(out)
+	}
+	httpsPorts := map[int]bool{}
+	for _, p := range webPorts {
+		if p == 443 || p == 8443 || p == 9443 {
+			httpsPorts[p] = true
+		}
+	}
+	if len(httpsPorts) == 0 {
+		return nil
+	}
+	// сортировка портов для детерминизма
+	var ports []int
+	for p := range httpsPorts {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+	for _, p := range ports {
+		out = append(out, fmt.Sprintf("https://%s", joinHostPort(job.Host, p)))
+	}
+	for _, name := range discoverSiteNames(ctx, cfg, job, webPorts) {
+		if httpsPorts[443] {
+			out = append(out, "https://"+name)
+		}
+	}
+	return mergeURLs(out)
 }
 
 func portOpen(ports []int, p int) bool {

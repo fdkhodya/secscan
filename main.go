@@ -16,22 +16,22 @@ import (
 var webFS embed.FS
 
 type Config struct {
-	Listen      string
-	DataDir     string
-	HostDataDir string
-	User        string
-	Pass        string
-	NmapImage   string
-	ZapImage    string
-	ZapEnabled  bool
-	DockerNet   string
-	NmapVulners bool
-	// Greenbone (OpenVAS) — gvmd в том же docker-compose (профиль greenbone):
-	// GMP по unix-сокету /run/gvmd/gvmd.sock (общий volume gvmd_socket_vol).
-	OpenVASEnabled bool
-	GmpSocket      string
-	GmpUser        string
-	GmpPass        string
+	Listen        string
+	DataDir       string
+	HostDataDir   string
+	User          string
+	Pass          string
+	NmapImage     string
+	ZapImage      string
+	NucleiImage   string
+	SslImage      string
+	ZapEnabled    bool
+	DockerNet     string
+	Vulners       bool // NSE vulners (CVE по версиям)
+	NseEnabled    bool // доп. NSE-скрипты (ssl-enum-ciphers, http-security-headers...)
+	UdpEnabled    bool // nmap UDP (top-50)
+	SslEnabled    bool // TLS/SSL-анализ (testssl.sh)
+	NucleiEnabled bool
 	// Crtsh — поиск соседних сайтов цели через crt.sh (Certificate
 	// Transparency) + TLS-сертификаты; 0 — только nmap/ZAP по цели.
 	Crtsh bool
@@ -61,23 +61,23 @@ func initLocalTime(tz string) {
 
 func loadConfig() Config {
 	cfg := Config{
-		Listen:      envOr("SECSCAN_LISTEN", ":8510"),
-		DataDir:     envOr("SECSCAN_DATA", "./data"),
-		HostDataDir: envOr("SECSCAN_HOST_DATA", ""),
-		User:        envOr("SECSCAN_USER", "admin"),
-		Pass:        envOr("SECSCAN_PASS", ""),
-		NmapImage:   envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
-		ZapImage:    envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
-		ZapEnabled:  envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
-		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
-		NmapVulners: envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
-		// Greenbone вкл. только там, где запущен стек (см. docker-compose.yml,
-		// профиль greenbone). Пароль — SECSCAN_GMP_PASS из .env.
-		OpenVASEnabled: envOr("SECSCAN_OPENVAS_ENABLED", "0") != "0",
-		GmpSocket:      envOr("SECSCAN_GMP_SOCKET", "/run/gvmd/gvmd.sock"),
-		GmpUser:        envOr("SECSCAN_GMP_USER", "admin"),
-		GmpPass:        envOr("SECSCAN_GMP_PASS", ""),
-		Crtsh:          envOr("SECSCAN_CRTSH", "1") != "0",
+		Listen:        envOr("SECSCAN_LISTEN", ":8510"),
+		DataDir:       envOr("SECSCAN_DATA", "./data"),
+		HostDataDir:   envOr("SECSCAN_HOST_DATA", ""),
+		User:          envOr("SECSCAN_USER", "admin"),
+		Pass:          envOr("SECSCAN_PASS", ""),
+		NmapImage:     envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
+		ZapImage:      envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
+		NucleiImage:   envOr("SECSCAN_NUCLEI_IMAGE", "projectdiscovery/nuclei:v2.9.14"),
+		SslImage:      envOr("SECSCAN_SSL_IMAGE", "drwetter/testssl.sh:latest"),
+		ZapEnabled:    envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
+		DockerNet:     envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		Vulners:       envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
+		NseEnabled:    envOr("SECSCAN_NSE_ENABLED", "1") != "0",
+		UdpEnabled:    envOr("SECSCAN_UDP_ENABLED", "0") != "0",
+		SslEnabled:    envOr("SECSCAN_SSL_ENABLED", "1") != "0",
+		NucleiEnabled: envOr("SECSCAN_NUCLEI_ENABLED", "1") != "0",
+		Crtsh:         envOr("SECSCAN_CRTSH", "1") != "0",
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"

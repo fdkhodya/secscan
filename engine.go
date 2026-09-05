@@ -25,9 +25,12 @@ func NewEngine(store *Store, cfg *Config) *Engine {
 		store: store,
 		cfg:   cfg,
 		defs: Settings{
-			ZapEnabled:     cfg.ZapEnabled,
-			OpenVASEnabled: cfg.OpenVASEnabled,
-			Vulners:        cfg.NmapVulners,
+			ZapEnabled:    cfg.ZapEnabled,
+			NucleiEnabled: cfg.NucleiEnabled,
+			UdpEnabled:    cfg.UdpEnabled,
+			NseEnabled:    cfg.NseEnabled,
+			Vulners:       cfg.Vulners,
+			SslEnabled:    cfg.SslEnabled,
 		},
 		queue: make(chan string, 10),
 	}
@@ -72,8 +75,11 @@ func (e *Engine) Submit(target string) (string, error) {
 	// снапшот включённых проверок на момент запуска
 	set, _ := e.store.LoadSettings(e.defs)
 	j.ScanZap = set.ZapEnabled
-	j.ScanOpenVAS = set.OpenVASEnabled
+	j.ScanNuclei = set.NucleiEnabled
+	j.ScanUdp = set.UdpEnabled
+	j.ScanNse = set.NseEnabled
 	j.ScanVulners = set.Vulners
+	j.ScanSsl = set.SslEnabled
 
 	if err := e.store.SaveJob(j); err != nil {
 		return "", err
@@ -111,16 +117,21 @@ func (e *Engine) run(id string) {
 		log.Printf("load job %s: %v", id, err)
 		return
 	}
-	e.set(j, "running", "nmap: сканирование портов и сервисов", "")
+	e.set(j, "running", "nmap: сканирование TCP-портов и сервисов", "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	// Общий бюджет на «быстрые» этапы (nmap/zap/ssl/nuclei-части).
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
 	defer cancel()
 
-	// 1) nmap
-	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir, j.ScanVulners)
+	// 1) nmap TCP: порты/сервисы (+NSE: vulners и доп. скрипты по тумблерам)
+	nmapFatal := false
+	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg, j.Host, j.ScanVulners, j.ScanNse)
 	if err != nil {
 		msg := fmt.Sprintf("этап nmap: %v", err)
 		e.set(j, "running", "nmap: ошибка", msg)
+		if len(nmapFindings) == 0 {
+			nmapFatal = true // нет даже частичных результатов
+		}
 	}
 	if len(nmapFindings) > 0 {
 		j.Findings = append(j.Findings, nmapFindings...)
@@ -128,15 +139,29 @@ func (e *Engine) run(id string) {
 	}
 	sort.Ints(webPorts)
 
-	// 2) ZAP: проверяем цель и все найденные на её IP сайты
-	var urls []string
+	// 2) nmap UDP (top-50 портов) — по тумблеру
+	if j.ScanUdp {
+		e.set(j, "running", "nmap: сканирование UDP-портов", "")
+		udpFindings, err := nmapUDPScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host)
+		if err != nil {
+			e.set(j, "running", "nmap-udp: ошибка", fmt.Sprintf("этап nmap-udp: %v", err))
+		} else if len(udpFindings) > 0 {
+			j.Findings = append(j.Findings, udpFindings...)
+			_ = e.store.SaveJob(j)
+		}
+	} else {
+		e.set(j, "running", "nmap-udp: выключен переключателем", "")
+	}
+
+	// 3) ZAP: цель и все найденные на её IP сайты (http/https)
+	var webURLs []string
 	if j.ScanZap {
-		urls = zapTargetList(ctx, e.cfg, j, webPorts)
-		if len(urls) > 0 {
-			e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(urls)), "")
+		webURLs = webTargetList(ctx, e.cfg, j, webPorts)
+		if len(webURLs) > 0 {
+			e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(webURLs)), "")
 			okN, zapErrs := 0, []string{}
-			for i, u := range urls {
-				e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(urls), u), "")
+			for i, u := range webURLs {
+				e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(webURLs), u), "")
 				// у каждого сайта собственный бюджет; общий ctx не даёт
 				// одному медленному сайту съесть время остальных
 				uCtx, cancel := context.WithTimeout(ctx, zapTargetTimeout)
@@ -152,7 +177,7 @@ func (e *Engine) run(id string) {
 			}
 			msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
 			if len(zapErrs) > 0 {
-				msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(urls), strings.Join(zapErrs, "; "))
+				msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(webURLs), strings.Join(zapErrs, "; "))
 			}
 			if len(zapErrs) > 0 {
 				// префикс «этап zap» — ошибки этапа не роняют задачу целиком
@@ -161,66 +186,74 @@ func (e *Engine) run(id string) {
 				e.set(j, "running", msg, "")
 			}
 		}
-	}
-	if !j.ScanZap {
+	} else {
 		e.set(j, "running", "zap: выключен переключателем", "")
-	} else if len(urls) == 0 && j.URL == "" {
-		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
 	}
 
-	// 3) OpenVAS (Greenbone в том же docker-compose, профиль greenbone):
-	//    GMP к gvmd по unix-сокету — отдельным контейнером-мостом больше
-	//    не пользуемся. Ошибки этапа некритичны: nmap/zap-находки остаются.
-	if j.ScanOpenVAS {
-		switch {
-		case e.cfg.GmpPass == "":
-			e.set(j, "running", "openvas: включён, но не задан SECSCAN_GMP_PASS — пропущен", "")
-		case !socketExists(e.cfg.GmpSocket):
-			e.set(j, "running", "openvas: сокет gvmd недоступен ("+e.cfg.GmpSocket+") — стек Greenbone не запущен — пропущен", "")
-		default:
-			// У OpenVAS собственный бюджет: полный скан хоста идёт десятки
-			// минут, nmap/zap живут в рамках общего ctx (90 мин).
-			ctxOv, cancelOv := context.WithTimeout(context.Background(), 8*time.Hour)
-			findings, err := openvasScan(ctxOv, e.cfg, j.ID, j.Host, func(stage string) {
-				e.set(j, "running", stage, "")
-			})
-			cancelOv()
-			if err != nil {
-				e.set(j, "running", "openvas: ошибка — "+err.Error(), "")
-			} else {
+	// 4) TLS/SSL-анализ (testssl.sh) — по https-целям
+	if j.ScanSsl {
+		sslURLs := sslTargetList(ctx, e.cfg, j, webPorts)
+		if len(sslURLs) > 0 {
+			e.set(j, "running", fmt.Sprintf("ssl: TLS/SSL-анализ — целей: %d", len(sslURLs)), "")
+			sslErrs := []string{}
+			for i, u := range sslURLs {
+				e.set(j, "running", fmt.Sprintf("ssl: %d/%d — %s", i+1, len(sslURLs), u), "")
+				uCtx, cancel := context.WithTimeout(ctx, sslTargetTimeout)
+				findings, err := sslScan(uCtx, e.cfg, j.ID, i, u)
+				cancel()
+				if err != nil {
+					sslErrs = append(sslErrs, u+": "+firstLine(err.Error()))
+					continue
+				}
 				j.Findings = append(j.Findings, findings...)
 				_ = e.store.SaveJob(j)
 			}
+			if len(sslErrs) > 0 {
+				e.set(j, "running", "ssl: с ошибками",
+					"этап ssl: "+truncate("ssl: ошибки: "+strings.Join(sslErrs, "; "), 600))
+			} else {
+				e.set(j, "running", fmt.Sprintf("ssl: проверено целей: %d", len(sslURLs)), "")
+			}
+		} else {
+			e.set(j, "running", "ssl: https-сервисы не обнаружены — пропущен", "")
 		}
 	} else {
-		e.set(j, "running", "openvas: выключен переключателем", "")
+		e.set(j, "running", "ssl: выключен переключателем", "")
+	}
+
+	// 5) nuclei: сигнатурный веб-сканер (лёгкая замена OpenVAS)
+	if j.ScanNuclei {
+		nucURLs := webTargetList(ctx, e.cfg, j, webPorts)
+		if len(nucURLs) > 0 {
+			e.set(j, "running", fmt.Sprintf("nuclei: сигнатурный скан — целей: %d", len(nucURLs)), "")
+			nucCtx, cancel := context.WithTimeout(ctx, nucleiStageTimeout)
+			findings, err := nucleiScan(nucCtx, e.cfg, j.ID, nucURLs, func(stage string) {
+				e.set(j, "running", stage, "")
+			})
+			cancel()
+			if err != nil {
+				e.set(j, "running", "nuclei: с ошибками", "этап nuclei: "+truncate(err.Error(), 600))
+			} else {
+				j.Findings = append(j.Findings, findings...)
+				_ = e.store.SaveJob(j)
+				e.set(j, "running", fmt.Sprintf("nuclei: проверено целей: %d", len(nucURLs)), "")
+			}
+		} else {
+			e.set(j, "running", "nuclei: веб-сервисы не обнаружены — пропущен", "")
+		}
+	} else {
+		e.set(j, "running", "nuclei: выключен переключателем", "")
 	}
 
 	if ctx.Err() != nil {
 		e.set(j, "error", "завершено по таймауту", ctx.Err().Error())
 		return
 	}
-	if j.Error != "" && !strings.HasPrefix(j.Error, "этап zap") && strings.Contains(j.Error, "nmap") {
-		e.set(j, "error", "", j.Error)
+	if nmapFatal {
+		e.set(j, "error", "nmap: ошибка", j.Error)
 		return
 	}
 	e.set(j, "done", "готово", "")
-}
-
-// zapTargets выбирает URL для ZAP: явный URL или веб-порт из nmap.
-func zapTargets(j *Job, webPorts []int) []string {
-	if j.URL != "" {
-		return []string{j.URL}
-	}
-	var out []string
-	for _, p := range webPorts {
-		scheme := "http"
-		if p == 443 || p == 8443 || p == 9443 {
-			scheme = "https"
-		}
-		out = append(out, fmt.Sprintf("%s://%s", scheme, joinHostPort(j.Host, p)))
-	}
-	return out
 }
 
 // DeleteScans удаляет завершённые задачи (done/error) и их рабочие каталоги.
@@ -244,7 +277,7 @@ func (e *Engine) DeleteScans(ids []string) (int, error) {
 			return n, err
 		}
 		n++
-		// рабочий каталог ZAP (best effort; в контейнере хост-пути может не быть)
+		// рабочие каталоги сканеров (best effort; в контейнере хост-пути может не быть)
 		_ = os.RemoveAll(filepath.Join(e.cfg.HostDataDir, "work", id))
 	}
 	return n, nil

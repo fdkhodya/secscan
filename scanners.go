@@ -77,17 +77,27 @@ type nmapResult struct {
 }
 
 // nmapScan возвращает находки и список открытых веб-портов.
-func nmapScan(ctx context.Context, image, network, host, hostDataDir string, vulners bool) ([]Finding, []int, error) {
+// vulners — NSE-скрипт vulners (CVE по версиям); nse — доп. безопасные
+// NSE-скрипты (ssl-enum-ciphers, http-security-headers).
+func nmapScan(ctx context.Context, cfg *Config, host string, vulners, nse bool) ([]Finding, []int, error) {
 	args := []string{
 		"-Pn", "-sV", "-T4", "--top-ports", "1000", "--open",
 		"--host-timeout", "15m", "-oX", "-",
 	}
+	var scripts []string
 	if vulners {
 		// NSE vulners — сверка CVE по vulners.com (нужен исходящий HTTPS)
-		args = append(args, "--script", "vulners")
+		scripts = append(scripts, "vulners")
+	}
+	if nse {
+		// доп. безопасные NSE-скрипты: TLS-протоколы/шифры, HTTP-методы/TRACE
+		scripts = append(scripts, "ssl-enum-ciphers", "http-methods", "http-trace")
+	}
+	if len(scripts) > 0 {
+		args = append(args, "--script", strings.Join(scripts, ","))
 	}
 	args = append(args, host)
-	out, errOut, err := runDocker(ctx, image, network, nil, args)
+	out, errOut, err := runDocker(ctx, cfg.NmapImage, cfg.DockerNet, nil, args)
 	if err != nil {
 		// nmap может вернуть ненулевой код при частичном скане (rc>0),
 		// XML при этом часто валиден — пробуем распарсить.
@@ -95,6 +105,34 @@ func nmapScan(ctx context.Context, image, network, host, hostDataDir string, vul
 			return nil, nil, fmt.Errorf("nmap: %v: %s", err, tail(errOut, 1500))
 		}
 	}
+	findings, webPorts, err := parseNmapResults(out)
+	if err != nil {
+		return nil, nil, err
+	}
+	return findings, webPorts, nil
+}
+
+// nmapUDPScan — сканирование топ-50 UDP-портов (по тумблеру).
+func nmapUDPScan(ctx context.Context, image, network, host string) ([]Finding, error) {
+	args := []string{
+		"-Pn", "-sU", "-T4", "--top-ports", "50", "--open",
+		"--host-timeout", "10m", "-oX", "-", host,
+	}
+	out, errOut, err := runDocker(ctx, image, network, nil, args)
+	if err != nil {
+		if !strings.Contains(out, "<nmaprun") {
+			return nil, fmt.Errorf("nmap-udp: %v: %s", err, tail(errOut, 1500))
+		}
+	}
+	findings, _, err := parseNmapResults(out)
+	if err != nil {
+		return nil, fmt.Errorf("nmap-udp xml parse: %w", err)
+	}
+	return findings, nil
+}
+
+// parseNmapResults разбирает XML nmap (-oX -) в находки и веб-порты.
+func parseNmapResults(out string) ([]Finding, []int, error) {
 	var res nmapResult
 	if err := xml.Unmarshal([]byte(out), &res); err != nil {
 		return nil, nil, fmt.Errorf("nmap xml parse: %w", err)
@@ -117,7 +155,7 @@ func nmapScan(ctx context.Context, image, network, host, hostDataDir string, vul
 			}
 			f := portFinding(addr, p)
 			findings = append(findings, f)
-			// NSE-скрипты порта (vulners, http-vuln-*, ssl-*...)
+			// NSE-скрипты порта (vulners, ssl-enum-ciphers, http-security-headers...)
 			for _, s := range p.Script {
 				findings = append(findings, scriptFindings(addr, p, s)...)
 			}
@@ -171,8 +209,17 @@ func portFinding(host string, p nmapPort) Finding {
 	return f
 }
 
-// scriptFindings разбирает NSE-скрипты: vulners (CVE+CVSS) и "VULNERABLE".
+// scriptFindings разбирает NSE-скрипты: vulners (CVE+CVSS), "VULNERABLE",
+// ssl-enum-ciphers, http-methods, http-trace.
 func scriptFindings(host string, p nmapPort, s nmapScr) []Finding {
+	switch s.ID {
+	case "ssl-enum-ciphers":
+		return sslCipherFindings(host, p, s)
+	case "http-methods":
+		return httpMethodsFindings(host, p, s)
+	case "http-trace":
+		return httpTraceFindings(host, p, s)
+	}
 	var out []Finding
 	low := strings.ToLower(s.Output)
 	if strings.Contains(low, "vulnerable") || strings.HasPrefix(s.ID, "http-vuln") ||
@@ -225,6 +272,126 @@ func scriptFindings(host string, p nmapPort, s nmapScr) []Finding {
 }
 
 var vulnersRe = regexp.MustCompile(`(CVE-\d{4}-\d{4,7})[^\n]*?(\d+\.\d+)`)
+
+// sslCipherFindings — разбор NSE ssl-enum-ciphers: устаревшие протоколы,
+// слабые шифры (least strength), TLS-сжатие (CRIME).
+func sslCipherFindings(host string, p nmapPort, s nmapScr) []Finding {
+	var out []Finding
+	weakProto := map[string]Severity{
+		"SSLv2": SevCritical, "SSLv3": SevHigh,
+		"TLSv1.0": SevMedium, "TLSv1.1": SevMedium,
+	}
+	for proto, sev := range weakProto {
+		re := regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(proto) + `:[ \t]*$`)
+		if !re.MatchString(s.Output) {
+			continue
+		}
+		rem := "Отключите " + proto + " в конфигурации TLS; оставьте только TLS 1.2 и TLS 1.3."
+		if sev == SevCritical {
+			rem = "Немедленно отключите " + proto + " — протокол полностью скомпрометирован."
+		}
+		out = append(out, Finding{
+			ID:          "nmap-ssl-proto-" + strings.ToLower(strings.ReplaceAll(proto, ".", "-")) + "-" + host,
+			Source:      "nmap",
+			Severity:    sev,
+			Host:        host,
+			Port:        p.PortID,
+			Protocol:    "tcp",
+			Title:       "Включён устаревший протокол " + proto,
+			Description: "Сервер на порту " + strconv.Itoa(p.PortID) + " поддерживает устаревший протокол " + proto + " — он небезопасен и должен быть отключён.",
+			Remediation: rem,
+			Evidence:    firstLine(s.Output),
+		})
+	}
+	if m := nmapLeastStrengthRe.FindStringSubmatch(s.Output); m != nil {
+		st := m[1]
+		sev := SevInfo
+		label := ""
+		switch st {
+		case "F", "E", "D":
+			sev, label = SevHigh, "очень слабые шифры"
+		case "C":
+			sev, label = SevMedium, "слабые шифры"
+		case "B":
+			sev, label = SevLow, "относительно слабые шифры"
+		case "A":
+			label = "сильные шифры"
+		}
+		if sev != SevInfo {
+			out = append(out, Finding{
+				ID:          "nmap-ssl-strength-" + st + "-" + host,
+				Source:      "nmap",
+				Severity:    sev,
+				Host:        host,
+				Port:        p.PortID,
+				Protocol:    "tcp",
+				Title:       "Слабые TLS-шифры (уровень " + st + ")",
+				Description: "NSE ssl-enum-ciphers оценивает минимальную стойкость шифров сервера как " + st + " (" + label + ").",
+				Remediation: "Настройте TLS: отключите слабые шифры (RC4, 3DES, экспортные, CBC без AEAD), оставьте только современные наборы.",
+				Evidence:    firstLine(s.Output),
+			})
+		}
+	}
+	if strings.Contains(s.Output, "compressors:") && strings.Contains(s.Output, "DEFLATE") {
+		out = append(out, Finding{
+			ID:          "nmap-ssl-crime-" + host,
+			Source:      "nmap",
+			Severity:    SevHigh,
+			Host:        host,
+			Port:        p.PortID,
+			Protocol:    "tcp",
+			Title:       "Включено TLS-сжатие (уязвимость CRIME)",
+			Description: "Сервер поддерживает сжатие TLS (DEFLATE) — возможна атака CRIME на секреты в TLS.",
+			Remediation: "Отключите сжатие TLS на сервере.",
+			Evidence:    firstLine(s.Output),
+		})
+	}
+	return out
+}
+
+var nmapLeastStrengthRe = regexp.MustCompile(`(?m)least strength:[ \t]*([A-F])`)
+
+// httpMethodsFindings — разбор NSE http-methods: разрешённые опасные методы.
+func httpMethodsFindings(host string, p nmapPort, s nmapScr) []Finding {
+	m := nmapRiskyMethodsRe.FindStringSubmatch(s.Output)
+	if m == nil || strings.TrimSpace(m[1]) == "" {
+		return nil
+	}
+	methods := strings.TrimSpace(m[1])
+	return []Finding{{
+		ID:          "nmap-http-methods-" + host,
+		Source:      "nmap",
+		Severity:    SevMedium,
+		Host:        host,
+		Port:        p.PortID,
+		Protocol:    p.Protocol,
+		Title:       "Разрешены опасные HTTP-методы",
+		Description: "Веб-сервер разрешает опасные HTTP-методы: " + methods + ". Они могут использоваться для изменения/удаления ресурсов (PUT/DELETE), обхода ограничений (TRACE, CONNECT) и т.п.",
+		Remediation: "Отключите неиспользуемые HTTP-методы (PUT, DELETE, TRACE, CONNECT и др.) на уровне веб-сервера/приложения.",
+		Evidence:    firstLine(s.Output),
+	}}
+}
+
+var nmapRiskyMethodsRe = regexp.MustCompile(`(?i)potentially risky methods:[ \t]*([A-Z][A-Z ,]*)`)
+
+// httpTraceFindings — разбор NSE http-trace: включённый TRACE (XST).
+func httpTraceFindings(host string, p nmapPort, s nmapScr) []Finding {
+	if !strings.Contains(s.Output, "TRACE is enabled") {
+		return nil
+	}
+	return []Finding{{
+		ID:          "nmap-http-trace-" + host,
+		Source:      "nmap",
+		Severity:    SevMedium,
+		Host:        host,
+		Port:        p.PortID,
+		Protocol:    p.Protocol,
+		Title:       "Включён HTTP TRACE (риск XST)",
+		Description: "Веб-сервер разрешает метод TRACE — возможна атака Cross-Site Tracing (XST), в частности кража HttpOnly-куки при XSS.",
+		Remediation: "Отключите метод TRACE на веб-сервере.",
+		Evidence:    firstLine(s.Output),
+	}}
+}
 
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

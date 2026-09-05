@@ -60,7 +60,7 @@ func sevFromCVSS(cvss float64) Severity {
 // Finding — единая находка любого сканера.
 type Finding struct {
 	ID          string   `json:"id"`
-	Source      string   `json:"source"` // nmap | zap | openvas
+	Source      string   `json:"source"` // nmap | zap | nuclei | ssl
 	Title       string   `json:"title"`
 	Severity    Severity `json:"severity"`
 	CVSS        float64  `json:"cvss,omitempty"`
@@ -77,9 +77,12 @@ type Finding struct {
 
 // Settings — включённые виды проверок (хранятся в data/settings.json).
 type Settings struct {
-	ZapEnabled     bool `json:"zap_enabled"`
-	OpenVASEnabled bool `json:"openvas_enabled"`
-	Vulners        bool `json:"vulners"`
+	ZapEnabled    bool `json:"zap_enabled"`
+	NucleiEnabled bool `json:"nuclei_enabled"`
+	UdpEnabled    bool `json:"udp_enabled"`
+	NseEnabled    bool `json:"nse_enabled"` // доп. NSE-скрипты (ssl-enum-ciphers и др.)
+	Vulners       bool `json:"vulners"`
+	SslEnabled    bool `json:"ssl_enabled"` // TLS/SSL-анализ (testssl.sh)
 }
 
 // Job — одна задача сканирования.
@@ -96,8 +99,11 @@ type Job struct {
 	DoneAt    string `json:"done_at,omitempty"`
 	// снапшот включённых проверок на момент запуска скана
 	ScanZap     bool      `json:"scan_zap"`
-	ScanOpenVAS bool      `json:"scan_openvas"`
+	ScanNuclei  bool      `json:"scan_nuclei"`
+	ScanUdp     bool      `json:"scan_udp"`
+	ScanNse     bool      `json:"scan_nse"`
 	ScanVulners bool      `json:"scan_vulners"`
+	ScanSsl     bool      `json:"scan_ssl"`
 	Findings    []Finding `json:"findings,omitempty"`
 }
 
