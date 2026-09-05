@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -205,4 +207,31 @@ func zapTargets(j *Job, webPorts []int) []string {
 		out = append(out, fmt.Sprintf("%s://%s", scheme, joinHostPort(j.Host, p)))
 	}
 	return out
+}
+
+// DeleteScans удаляет завершённые задачи (done/error) и их рабочие каталоги.
+// Активные (queued/running) удалять нельзя: воркер держит задачу в памяти и
+// при следующем шаге пересоздаст файл.
+func (e *Engine) DeleteScans(ids []string) (int, error) {
+	var toDelete []string
+	for _, id := range ids {
+		j, err := e.store.LoadJob(id)
+		if err != nil {
+			continue // уже удалена
+		}
+		if j.Status == "queued" || j.Status == "running" {
+			return 0, fmt.Errorf("задача %s ещё выполняется (%s) — удалите после завершения", id, j.Status)
+		}
+		toDelete = append(toDelete, id)
+	}
+	n := 0
+	for _, id := range toDelete {
+		if err := e.store.DeleteJob(id); err != nil {
+			return n, err
+		}
+		n++
+		// рабочий каталог ZAP (best effort; в контейнере хост-пути может не быть)
+		_ = os.RemoveAll(filepath.Join(e.cfg.HostDataDir, "work", id))
+	}
+	return n, nil
 }

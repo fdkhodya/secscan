@@ -137,6 +137,7 @@ func main() {
 	mux.HandleFunc("POST /api/scans", auth.requireAuth(apiCreateScan(eng)))
 	mux.HandleFunc("GET /api/scans", auth.requireAuth(apiListScans(store)))
 	mux.HandleFunc("GET /api/scans/{id}", auth.requireAuth(apiGetScan(store)))
+	mux.HandleFunc("DELETE /api/scans", auth.requireAuth(apiDeleteScans(eng)))
 
 	// Настройки видов проверок (переключатели в UI)
 	mux.HandleFunc("GET /api/settings", auth.requireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +233,30 @@ func apiListScans(store *Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, jobs)
+	}
+}
+
+// apiDeleteScans удаляет выбранные завершённые задачи: DELETE /api/scans
+// с телом {"ids":["..."]}. Активные задачи отклоняются (409).
+func apiDeleteScans(eng *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "неверный JSON"})
+			return
+		}
+		if len(req.IDs) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "пустой список ids"})
+			return
+		}
+		n, err := eng.DeleteScans(req.IDs)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"deleted": n})
 	}
 }
 

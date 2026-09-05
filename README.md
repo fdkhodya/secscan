@@ -95,6 +95,7 @@ GMP-клиент (gmp.go) покрыт тестом на mock-сокете (`go 
     POST /api/scans        {"target":"https://example.com"}  → {"id":"..."}
     GET  /api/scans        список задач
     GET  /api/scans/{id}   задача (статус, находки)
+    DELETE /api/scans      {"ids":["..."]} — удалить завершённые задачи (в UI: чекбоксы + «Удалить выбранные»)
     GET  /api/settings     / PUT /api/settings — включённые виды проверок
     GET  /reports/{id}     HTML-отчёт
     GET  /reports/{id}/export.csv|.pdf — экспорт

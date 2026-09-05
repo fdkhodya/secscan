@@ -91,6 +91,17 @@ func (s *Store) LoadJob(id string) (*Job, error) {
 	return &j, nil
 }
 
+// DeleteJob удаляет файл задачи; отсутствующая задача — не ошибка.
+func (s *Store) DeleteJob(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(s.jobPath(id))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func (s *Store) ListJobs() ([]*Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

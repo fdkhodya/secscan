@@ -32,6 +32,13 @@
   a.report { color:#7ab8ff; text-decoration:none; }
   .empty { color:#5b6372; text-align:center; padding:40px; }
   #err { color:#f87171; font-size:13px; margin-top:8px; min-height:16px; }
+  th.chk, td.chk { width:28px; padding-right:0; }
+  .sel, #sel-all { accent-color:#2f6fed; width:15px; height:15px; cursor:pointer; }
+  .sel:disabled { opacity:.25; cursor:default; }
+  .bulk { display:flex; align-items:center; gap:12px; margin-top:14px; }
+  #del-sel { padding:9px 18px; border:0; border-radius:10px; background:#a13030; color:#fff; font-size:14px; cursor:pointer; }
+  #del-sel:disabled { opacity:.35; cursor:not-allowed; }
+  .bulk-hint { color:#7d8594; font-size:12px; }
 </style>
 </head>
 <body>
@@ -54,12 +61,18 @@
     <label class="sw"><input type="checkbox" id="sw-vulners"> NSE vulners (CVE по nmap)</label>
   </div>
   <table>
-    <thead><tr><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
-    <tbody id="rows"><tr><td colspan="6" class="empty">Задач пока нет</td></tr></tbody>
+    <thead><tr><th class="chk"><input type="checkbox" id="sel-all" title="Выбрать завершённые"></th><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
+    <tbody id="rows"><tr><td colspan="7" class="empty">Задач пока нет</td></tr></tbody>
   </table>
+  <div class="bulk">
+    <button id="del-sel" disabled>Удалить выбранные</button>
+    <span id="sel-count" class="bulk-hint"></span>
+    <span class="bulk-hint">удаляются только завершённые задачи (done/error)</span>
+  </div>
 </main>
 <script>
 let lastId = '';
+const selected = new Set(); // id выбранных завершённых задач (переживает перерисовку списка)
 async function startScan() {
   const t = document.getElementById('target').value.trim();
   if (!t) return;
@@ -81,21 +94,53 @@ async function refresh() {
     const r = await fetch('/api/scans');
     const jobs = await r.json();
     const tb = document.getElementById('rows');
-    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Задач пока нет</td></tr>'; return; }
+    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">Задач пока нет</td></tr>'; updateSelected(); return; }
     tb.innerHTML = jobs.map(j => {
       const done = j.status === 'done';
       const err = j.status === 'error';
-      const report = (done || err) ? `<a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
+      const finished = done || err;
+      const report = finished ? `<a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
+      const chk = `<input type="checkbox" class="sel" data-id="${esc(j.id)}"${finished ? (selected.has(j.id) ? ' checked' : '') : ' disabled'}>`;
       return `<tr>
+        <td class="chk">${chk}</td>
         <td>${esc(j.id)}</td><td>${esc(j.target)}</td>
         <td><span class="st st-${esc(j.status)}">${esc(j.status)}</span></td>
         <td>${esc(j.stage || '')}${err ? ' <span style="color:#f87171">'+esc(j.error||'')+'</span>' : ''}</td>
         <td>${esc(j.created_at)}</td><td>${report}</td></tr>`;
     }).join('');
+    updateSelected();
   } catch(e) {}
 }
 setInterval(refresh, 3000);
 refresh();
+
+// ---- выбор и удаление отчётов ----
+function updateSelected() {
+  selected.clear();
+  document.querySelectorAll('#rows .sel:checked').forEach(cb => selected.add(cb.dataset.id));
+  const btn = document.getElementById('del-sel');
+  btn.disabled = selected.size === 0;
+  document.getElementById('sel-count').textContent = selected.size ? `выбрано: ${selected.size}` : '';
+}
+document.getElementById('sel-all').addEventListener('change', e => {
+  document.querySelectorAll('#rows .sel:not(:disabled)').forEach(cb => { cb.checked = e.target.checked; });
+  updateSelected();
+});
+document.getElementById('rows').addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('sel')) updateSelected();
+});
+document.getElementById('del-sel').addEventListener('click', async () => {
+  const ids = [...selected];
+  if (!ids.length) return;
+  if (!confirm(`Удалить выбранные отчёты (${ids.length})? Действие необратимо.`)) return;
+  try {
+    const r = await fetch('/api/scans', {method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    selected.clear();
+    refresh();
+  } catch(e) { document.getElementById('err').textContent = 'Ошибка удаления: ' + e.message; }
+});
 
 // ---- настройки (переключатели) ----
 let settings = {zap_enabled:false, openvas_enabled:false, vulners:false};
