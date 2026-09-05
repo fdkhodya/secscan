@@ -96,7 +96,7 @@ func (e *Engine) run(id string) {
 	defer cancel()
 
 	// 1) nmap
-	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir)
+	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg.NmapImage, e.cfg.DockerNet, j.Host, e.cfg.HostDataDir, e.cfg.NmapVulners)
 	if err != nil {
 		msg := fmt.Sprintf("этап nmap: %v", err)
 		e.set(j, "running", "nmap: ошибка", msg)
@@ -133,10 +133,18 @@ func (e *Engine) run(id string) {
 		e.set(j, "running", "zap: веб-сервисы не обнаружены — пропущен", "")
 	}
 
-	// 3) OpenVAS (зарезервировано)
-	_, openvasErr := openvasScan(ctx, j.Host)
-	if openvasErr != nil {
-		e.set(j, "running", "openvas: не настроен — пропущен", "")
+	// 3) OpenVAS (только если включён и задан адрес моста)
+	if e.cfg.OpenVASMode == "bridge" && e.cfg.OpenVASURL != "" {
+		e.set(j, "running", "openvas: сканирование (мост "+e.cfg.OpenVASURL+")", "")
+		findings, err := openvasBridgeScan(ctx, e.cfg.OpenVASURL, e.cfg.OpenVASToken, j.Host)
+		if err != nil {
+			e.set(j, "running", "openvas: ошибка — "+err.Error(), "")
+		} else {
+			j.Findings = append(j.Findings, findings...)
+			_ = e.store.SaveJob(j)
+		}
+	} else {
+		e.set(j, "running", "openvas: выключен (SECSCAN_OPENVAS_MODE=off) — Greenbone не запущен на этом хосте", "")
 	}
 
 	if ctx.Err() != nil {

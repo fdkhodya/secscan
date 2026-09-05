@@ -59,20 +59,20 @@ func sevFromCVSS(cvss float64) Severity {
 
 // Finding — единая находка любого сканера.
 type Finding struct {
-	ID          string  `json:"id"`
-	Source      string  `json:"source"` // nmap | zap | openvas
-	Title       string  `json:"title"`
+	ID          string   `json:"id"`
+	Source      string   `json:"source"` // nmap | zap | openvas
+	Title       string   `json:"title"`
 	Severity    Severity `json:"severity"`
-	CVSS        float64 `json:"cvss,omitempty"`
-	CVE         string  `json:"cve,omitempty"`
-	Host        string  `json:"host,omitempty"`
-	Port        int     `json:"port,omitempty"`
-	Protocol    string  `json:"protocol,omitempty"`
-	URL         string  `json:"url,omitempty"`
-	Description string  `json:"description"`
-	Remediation string  `json:"remediation"`
-	Evidence    string  `json:"evidence,omitempty"`
-	Confidence  string  `json:"confidence,omitempty"`
+	CVSS        float64  `json:"cvss,omitempty"`
+	CVE         string   `json:"cve,omitempty"`
+	Host        string   `json:"host,omitempty"`
+	Port        int      `json:"port,omitempty"`
+	Protocol    string   `json:"protocol,omitempty"`
+	URL         string   `json:"url,omitempty"`
+	Description string   `json:"description"`
+	Remediation string   `json:"remediation"`
+	Evidence    string   `json:"evidence,omitempty"`
+	Confidence  string   `json:"confidence,omitempty"`
 }
 
 // Job — одна задача сканирования.

@@ -16,15 +16,19 @@ import (
 var webFS embed.FS
 
 type Config struct {
-	Listen      string
-	DataDir     string
-	HostDataDir string
-	User        string
-	Pass        string
-	NmapImage   string
-	ZapImage    string
-	ZapEnabled  bool
-	DockerNet   string
+	Listen       string
+	DataDir      string
+	HostDataDir  string
+	User         string
+	Pass         string
+	NmapImage    string
+	ZapImage     string
+	ZapEnabled   bool
+	DockerNet    string
+	NmapVulners  bool
+	OpenVASMode  string // off | bridge
+	OpenVASURL   string
+	OpenVASToken string
 }
 
 func envOr(key, def string) string {
@@ -36,15 +40,19 @@ func envOr(key, def string) string {
 
 func loadConfig() Config {
 	cfg := Config{
-		Listen:      envOr("SECSCAN_LISTEN", ":8510"),
-		DataDir:     envOr("SECSCAN_DATA", "./data"),
-		HostDataDir: envOr("SECSCAN_HOST_DATA", ""),
-		User:        envOr("SECSCAN_USER", "admin"),
-		Pass:        envOr("SECSCAN_PASS", ""),
-		NmapImage:   envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
-		ZapImage:    envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
-		ZapEnabled:  envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
-		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		Listen:       envOr("SECSCAN_LISTEN", ":8510"),
+		DataDir:      envOr("SECSCAN_DATA", "./data"),
+		HostDataDir:  envOr("SECSCAN_HOST_DATA", ""),
+		User:         envOr("SECSCAN_USER", "admin"),
+		Pass:         envOr("SECSCAN_PASS", ""),
+		NmapImage:    envOr("SECSCAN_NMAP_IMAGE", "instrumentisto/nmap:latest"),
+		ZapImage:     envOr("SECSCAN_ZAP_IMAGE", "ghcr.io/zaproxy/zaproxy:stable"),
+		ZapEnabled:   envOr("SECSCAN_ZAP_ENABLED", "1") != "0",
+		DockerNet:    envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		NmapVulners:  envOr("SECSCAN_NMAP_VULNERS", "1") != "0",
+		OpenVASMode:  envOr("SECSCAN_OPENVAS_MODE", "off"),
+		OpenVASURL:   envOr("SECSCAN_OPENVAS_URL", ""),
+		OpenVASToken: envOr("SECSCAN_OPENVAS_TOKEN", ""),
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"
@@ -61,7 +69,7 @@ func loadConfig() Config {
 }
 
 var (
-	idxTpl  *template.Template
+	idxTpl   *template.Template
 	loginTpl *template.Template
 )
 

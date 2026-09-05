@@ -5,15 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ---------- общий запуск docker-контейнеров-сканеров ----------
@@ -78,11 +80,16 @@ type nmapResult struct {
 }
 
 // nmapScan возвращает находки и список открытых веб-портов.
-func nmapScan(ctx context.Context, image, network, host, hostDataDir string) ([]Finding, []int, error) {
+func nmapScan(ctx context.Context, image, network, host, hostDataDir string, vulners bool) ([]Finding, []int, error) {
 	args := []string{
 		"-Pn", "-sV", "-T4", "--top-ports", "1000", "--open",
-		"--host-timeout", "15m", "-oX", "-", host,
+		"--host-timeout", "15m", "-oX", "-",
 	}
+	if vulners {
+		// NSE vulners — сверка CVE по vulners.com (нужен исходящий HTTPS)
+		args = append(args, "--script", "vulners")
+	}
+	args = append(args, host)
 	out, errOut, err := runDocker(ctx, image, network, nil, args)
 	if err != nil {
 		// nmap может вернуть ненулевой код при частичном скане (rc>0),
@@ -201,15 +208,15 @@ func scriptFindings(host string, p nmapPort, s nmapScr) []Finding {
 				rem = "Проверьте актуальность версии и наличие патча (" + cve + ")."
 			}
 			out = append(out, Finding{
-				ID:          "nmap-vulners-" + cve,
-				Source:      "nmap",
-				Severity:    sev,
-				CVSS:        cvss,
-				CVE:         cve,
-				Host:        host,
-				Port:        p.PortID,
-				Protocol:    p.Protocol,
-				Title:       fmt.Sprintf("%s на %s %s", cve, p.Service.Name, p.Service.Version),
+				ID:       "nmap-vulners-" + cve,
+				Source:   "nmap",
+				Severity: sev,
+				CVSS:     cvss,
+				CVE:      cve,
+				Host:     host,
+				Port:     p.PortID,
+				Protocol: p.Protocol,
+				Title:    fmt.Sprintf("%s на %s %s", cve, p.Service.Name, p.Service.Version),
 				Description: fmt.Sprintf("База vulners (NSE) сообщает об уязвимости %s (CVSS %.1f) в %s %s.",
 					cve, cvss, p.Service.Name, p.Service.Version),
 				Remediation: rem,
@@ -255,17 +262,17 @@ type zapReport struct {
 }
 
 type zapAlert struct {
-	Alert      string           `json:"alert"`
-	RiskCode   flexibleInt      `json:"riskcode"`
-	Confidence string           `json:"confidence"`
-	Desc       string           `json:"desc"`
-	Solution   string           `json:"solution"`
-	Instances  []zapInstance    `json:"instances"`
+	Alert      string        `json:"alert"`
+	RiskCode   flexibleInt   `json:"riskcode"`
+	Confidence string        `json:"confidence"`
+	Desc       string        `json:"desc"`
+	Solution   string        `json:"solution"`
+	Instances  []zapInstance `json:"instances"`
 }
 
 type zapInstance struct {
-	URI     string `json:"uri"`
-	Method  string `json:"method"`
+	URI      string `json:"uri"`
+	Method   string `json:"method"`
 	Evidence string `json:"evidence"`
 }
 
@@ -345,17 +352,99 @@ func slug(s string) string {
 	return strings.Trim(re.ReplaceAllString(strings.ToLower(s), "-"), "-")
 }
 
-// ---------- OpenVAS (заглушка, подключим позже) ----------
+// ---------- OpenVAS через bridge ----------
+// Greenbone (gvmd+openvas+notus) живёт на отдельной машине (например,
+// Windows + Docker Desktop с большим объёмом RAM). Рядом с ним запускается
+// небольшой bridge, реализующий JSON API:
+//
+//	POST {url}/scan            {"target":"1.2.3.4"} -> {"id":"..."}
+//	GET  {url}/scan/{id}       -> {"status":"running|done|error",
+//	                               "error":"...","findings":[...Finding]}
+//
+// Протокол findings — тот же, что у остальных сканеров secscan
+// (см. models.go). Авторизация: Bearer-токен (SECSCAN_OPENVAS_TOKEN).
 
-var errOpenVASNotConfigured = errors.New("OpenVAS ещё не настроен")
+type bridgeScanStatus struct {
+	ID       string    `json:"id"`
+	Status   string    `json:"status"` // pending|running|done|error
+	Error    string    `json:"error,omitempty"`
+	Findings []Finding `json:"findings,omitempty"`
+}
 
-func openvasScan(ctx context.Context, host string) ([]Finding, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+func openvasBridgeScan(ctx context.Context, baseURL, token, host string) ([]Finding, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	body, err := json.Marshal(map[string]string{"target": host})
+	if err != nil {
+		return nil, err
 	}
-	return nil, errOpenVASNotConfigured
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(baseURL, "/")+"/scan", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bridge недоступен: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("bridge /scan: http %d: %s", resp.StatusCode, tail(string(raw), 300))
+	}
+	var created bridgeScanStatus
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return nil, fmt.Errorf("bridge /scan: parse: %w", err)
+	}
+	if created.ID == "" {
+		return nil, fmt.Errorf("bridge /scan: пустой id")
+	}
+
+	// ожидание результата (уважаем общий таймаут задачи)
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Second):
+		}
+		req2, err := http.NewRequestWithContext(ctx, http.MethodGet,
+			strings.TrimRight(baseURL, "/")+"/scan/"+created.ID, nil)
+		if err != nil {
+			return nil, err
+		}
+		if token != "" {
+			req2.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp2, err := client.Do(req2)
+		if err != nil {
+			continue // bridge временно недоступен — пробуем дальше
+		}
+		raw2, _ := io.ReadAll(io.LimitReader(resp2.Body, 8<<20))
+		resp2.Body.Close()
+		if resp2.StatusCode == http.StatusNotFound {
+			continue
+		}
+		if resp2.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("bridge poll: http %d", resp2.StatusCode)
+		}
+		var st bridgeScanStatus
+		if err := json.Unmarshal(raw2, &st); err != nil {
+			return nil, fmt.Errorf("bridge poll: parse: %w", err)
+		}
+		switch st.Status {
+		case "done":
+			return st.Findings, nil
+		case "error":
+			return st.Findings, fmt.Errorf("openvas: %s", st.Error)
+		}
+	}
 }
 
 // resolveHost извлекает хост для nmap из ввода пользователя.
