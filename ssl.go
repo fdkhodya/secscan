@@ -69,6 +69,46 @@ func parseSSLReport(b []byte, targetURL string) ([]Finding, error) {
 	}
 	var out []Finding
 	seen := map[string]bool{}
+	// Домен(ы) из сертификата сервера (cert_commonName/cert_subjectAltName в
+	// serverDefaults): severity у них OK/INFO, как находки в отчёт не попадают,
+	// но нужны как контекст — чтобы было видно, про какой домен речь (важно,
+	// когда скан идёт по IP, а сертификат выпущен на домен). Собираем отдельным
+	// проходом: порядок обхода map не гарантирован, иначе к моменту обработки
+	// cert_trust значения CN/SAN могли бы ещё не встретиться.
+	certCN, certSAN := "", ""
+	var collectCert func(any)
+	collectCert = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			if sid, _ := t["id"].(string); sid == "cert_commonName" || sid == "cert_subjectAltName" {
+				if f, ok := t["finding"].(string); ok && strings.TrimSpace(f) != "" {
+					if sid == "cert_commonName" && certCN == "" {
+						certCN = strings.TrimSpace(f)
+					} else if sid == "cert_subjectAltName" && certSAN == "" {
+						certSAN = strings.TrimSpace(f)
+					}
+				}
+			}
+			for _, val := range t {
+				collectCert(val)
+			}
+		case []any:
+			for _, val := range t {
+				collectCert(val)
+			}
+		}
+	}
+	collectCert(root)
+	certNote := func() string {
+		if certCN == "" {
+			return ""
+		}
+		n := "CN=" + certCN
+		if certSAN != "" && certSAN != certCN {
+			n += "; SAN=" + certSAN
+		}
+		return n
+	}
 	var walk func(any)
 	walk = func(v any) {
 		switch t := v.(type) {
@@ -88,6 +128,16 @@ func parseSSLReport(b []byte, targetURL string) ([]Finding, error) {
 							if r := []rune(title); len(r) > 110 {
 								title = string(r[:110]) + "…"
 							}
+							desc := finding
+							evidence := "testssl.sh: " + sid
+							if note := certNote(); note != "" {
+								evidence += "\nсертификат: " + note
+								// классический случай: скан по IP, а сертификат выпущен
+								// на домен — объясняем и подсказываем правильный адрес
+								if sid == "cert_trust" && strings.Contains(strings.ToLower(finding), "does not match") {
+									desc += fmt.Sprintf(" Сертификат не соответствует адресу проверки: запрос шёл на %s, а сертификат выпущен для %s. Доверие к сертификату проверяется по доменному имени — запустите скан по домену, например https://%s.", targetURL, note, certCN)
+								}
+							}
 							out = append(out, Finding{
 								ID:          id,
 								Source:      "ssl",
@@ -97,9 +147,9 @@ func parseSSLReport(b []byte, targetURL string) ([]Finding, error) {
 								Protocol:    "tcp",
 								URL:         targetURL,
 								Title:       title,
-								Description: finding,
+								Description: desc,
 								Remediation: "Исправьте TLS/SSL-конфигурацию сервера согласно выводу проверки (см. описание и доказательства).",
-								Evidence:    "testssl.sh: " + sid,
+								Evidence:    evidence,
 							})
 						}
 					}
