@@ -45,13 +45,16 @@
   /* окна результатов: по одному на каждый адрес (повторный скан обновляет окно) */
   .res-title { color:#8b93a3; font-size:12px; text-transform:uppercase; letter-spacing:.4px; margin:16px 2px 10px; }
   .res-title .res-sub { color:#5b6372; text-transform:none; letter-spacing:0; font-size:12px; }
-  .wgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px, 1fr)); gap:12px; }
-  .wcard { background:#14171d; border:1px solid #232834; border-radius:10px; padding:12px 14px 14px; display:flex; flex-direction:column; gap:9px; }
-  .whead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .wtarget { font-size:14px; font-weight:600; color:#cdd5e0; word-break:break-all; margin-right:auto; }
+  .wgrid { display:flex; flex-direction:column; gap:10px; }
+  .wcard { display:flex; align-items:center; gap:10px 26px; flex-wrap:wrap; background:#14171d; border:1px solid #232834; border-radius:10px; padding:12px 18px; }
+  .wmain { flex:1 1 300px; min-width:230px; display:flex; flex-direction:column; gap:5px; }
+  .whead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .wtarget { font-size:14px; font-weight:600; color:#cdd5e0; word-break:break-all; }
   .wmeta { color:#5b6372; font-size:12px; line-height:1.45; word-break:break-word; }
   .wmeta .werr { color:#f87171; }
-  .wcard .counts { margin-top:auto; }
+  .wcounts { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+  .wcounts .chip { min-width:0; padding:6px 12px; }
+  .wcounts .chip b { font-size:16px; }
   table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #20242e; }
   th { color:#8b93a3; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
@@ -185,18 +188,20 @@ function sevChips(job) {
   return SEV_ORDER.map(s => `<div class="chip sev-${s}"><b>${c[s]}</b>${SEV_LABELS[s]}</div>`).join('') +
     `<div class="chip chip-total"><b>${total}</b>Всего</div>`;
 }
-// html окна результата: одна карточка на адрес (job — самый свежий скан адреса)
+// html окна результата: строка-карточка на адрес (job — самый свежий скан адреса)
 function cardHTML(j) {
   const finished = j.status === 'done' || j.status === 'error';
-  const rep = finished ? ` <a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
+  const rep = finished ? `<a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
   const when = fmtLocal(finished ? (j.done_at || j.created_at) : (j.started_at || j.created_at));
   let meta = `<span>${esc(j.id)}</span> · ${when}`;
   if (j.status === 'running' && j.stage) meta += ` · ${esc(j.stage)}`;
   if (finished && j.error) meta += ` <span class="werr">— ${esc(trunc(j.error, 140))}</span>`;
   return `<div class="wcard">
-    <div class="whead"><span class="wtarget">${esc(j.target)}</span>${pill(j)}${rep}</div>
-    <div class="wmeta">${meta}</div>
-    <div class="counts">${sevChips(j)}</div>
+    <div class="wmain">
+      <div class="whead"><span class="wtarget">${esc(j.target)}</span>${pill(j)}${rep}</div>
+      <div class="wmeta">${meta}</div>
+    </div>
+    <div class="wcounts">${sevChips(j)}</div>
   </div>`;
 }
 // окна результатов: по одному на каждый адрес (host). Повторный скан того же
