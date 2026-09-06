@@ -42,6 +42,16 @@
   .sev-low { background:#12303a; border-color:#155e75; color:#a5f3fc; }
   .sev-info { background:#1c212b; border-color:#374151; color:#cbd5e1; }
   .chip-total { background:#1a1e26; border-color:#2c323d; color:#e6e6e6; }
+  /* окна результатов: по одному на каждый адрес (повторный скан обновляет окно) */
+  .res-title { color:#8b93a3; font-size:12px; text-transform:uppercase; letter-spacing:.4px; margin:16px 2px 10px; }
+  .res-title .res-sub { color:#5b6372; text-transform:none; letter-spacing:0; font-size:12px; }
+  .wgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(330px, 1fr)); gap:12px; }
+  .wcard { background:#14171d; border:1px solid #232834; border-radius:10px; padding:12px 14px 14px; display:flex; flex-direction:column; gap:9px; }
+  .whead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .wtarget { font-size:14px; font-weight:600; color:#cdd5e0; word-break:break-all; margin-right:auto; }
+  .wmeta { color:#5b6372; font-size:12px; line-height:1.45; word-break:break-word; }
+  .wmeta .werr { color:#f87171; }
+  .wcard .counts { margin-top:auto; }
   table { width:100%; border-collapse:collapse; margin-top:18px; font-size:14px; }
   th, td { text-align:left; padding:9px 10px; border-bottom:1px solid #20242e; }
   th { color:#8b93a3; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
@@ -87,14 +97,10 @@
     <div class="prog-grid" id="prog-list"></div>
     <div class="hint">кружок: серый — ждёт, жёлтый — выполняется, зелёный ✓ — готово, красный — ошибка этапа</div>
   </div>
-  <!-- сводка результатов выбранного скана -->
-  <div class="prog-panel" id="sum-panel" style="display:none">
-    <div class="prog-head">
-      <span class="p-title">Результаты сканирования</span>
-      <span class="p-target" id="sum-target"></span>
-      <span class="p-id" id="sum-id"></span>
-    </div>
-    <div class="counts" id="sum-counts"></div>
+  <!-- окна результатов: по одному на каждый просканированный адрес -->
+  <div id="res-wrap" style="display:none">
+    <div class="res-title">Результаты сканирования <span class="res-sub">— окно на каждый адрес; повторный скан того же адреса заменяет результат в его окне</span></div>
+    <div class="wgrid" id="res-grid"></div>
   </div>
   <table>
     <thead><tr><th class="chk"><input type="checkbox" id="sel-all" title="Выбрать завершённые"></th><th>ID</th><th>Цель</th><th>Статус</th><th>Этап</th><th>Начало</th><th></th></tr></thead>
@@ -157,23 +163,58 @@ function selectJob(job) {
     tr.classList.toggle('sel-row', tr.dataset.id === job.id);
   });
   renderProg(job);
-  renderSum(job);
 }
-// сводка по критичности выбранного скана (цвета как в отчёте)
-function renderSum(job) {
-  const panel = document.getElementById('sum-panel');
-  if (!job) { panel.style.display = 'none'; return; }
-  panel.style.display = '';
-  document.getElementById('sum-target').textContent = job.target;
-  document.getElementById('sum-id').textContent = job.id;
-  const order = ['critical', 'high', 'medium', 'low', 'info'];
-  const labels = {critical:'Критично', high:'Высокая', medium:'Средняя', low:'Низкая', info:'Информация'};
+const STATUSES = {
+  running: {t:'выполняется', c:'st-running'},
+  queued:  {t:'в очереди', c:'st-queued'},
+  done:    {t:'готово', c:'st-done'},
+  error:   {t:'ошибка', c:'st-error'},
+};
+const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+const SEV_LABELS = {critical:'Критично', high:'Высокая', medium:'Средняя', low:'Низкая', info:'Информация'};
+function pill(job) {
+  const s = STATUSES[job.status];
+  return s ? `<span class="st ${s.c}">${s.t}</span>` : '';
+}
+function trunc(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; }
+// чипы по критичности задачи (цвета как в отчёте)
+function sevChips(job) {
   const c = {critical:0, high:0, medium:0, low:0, info:0};
   (job.findings || []).forEach(f => { if (c[f.severity] !== undefined) c[f.severity]++; });
   const total = (job.findings || []).length;
-  document.getElementById('sum-counts').innerHTML =
-    order.map(s => `<div class="chip sev-${s}"><b>${c[s]}</b>${labels[s]}</div>`).join('') +
+  return SEV_ORDER.map(s => `<div class="chip sev-${s}"><b>${c[s]}</b>${SEV_LABELS[s]}</div>`).join('') +
     `<div class="chip chip-total"><b>${total}</b>Всего</div>`;
+}
+// html окна результата: одна карточка на адрес (job — самый свежий скан адреса)
+function cardHTML(j) {
+  const finished = j.status === 'done' || j.status === 'error';
+  const rep = finished ? ` <a class="report" href="/reports/${esc(j.id)}">отчёт</a>` : '';
+  const when = fmtLocal(finished ? (j.done_at || j.created_at) : (j.started_at || j.created_at));
+  let meta = `<span>${esc(j.id)}</span> · ${when}`;
+  if (j.status === 'running' && j.stage) meta += ` · ${esc(j.stage)}`;
+  if (finished && j.error) meta += ` <span class="werr">— ${esc(trunc(j.error, 140))}</span>`;
+  return `<div class="wcard">
+    <div class="whead"><span class="wtarget">${esc(j.target)}</span>${pill(j)}${rep}</div>
+    <div class="wmeta">${meta}</div>
+    <div class="counts">${sevChips(j)}</div>
+  </div>`;
+}
+// окна результатов: по одному на каждый адрес (host). Повторный скан того же
+// адреса = новая задача → окно показывает её, заменяя прежний результат.
+function renderResults(jobs) {
+  const wrap = document.getElementById('res-wrap');
+  const grid = document.getElementById('res-grid');
+  if (!jobs || !jobs.length) { wrap.style.display = 'none'; grid.innerHTML = ''; return; }
+  const seen = new Set();
+  const cards = [];
+  for (const j of jobs) { // список уже от свежих к старым — берём первый скан адреса
+    const key = String(j.host || j.target || '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    cards.push(cardHTML(j));
+  }
+  wrap.style.display = cards.length ? '' : 'none';
+  grid.innerHTML = cards.join('');
 }
 function renderProg(job) {
   const panel = document.getElementById('prog-panel');
@@ -181,11 +222,7 @@ function renderProg(job) {
   panel.style.display = '';
   document.getElementById('prog-target').textContent = job.target;
   document.getElementById('prog-id').textContent = job.id + (job.stage ? ' — ' + job.stage : '');
-  const st = job.status === 'running' ? '<span class="st st-running">выполняется</span>'
-    : job.status === 'queued' ? '<span class="st st-queued">в очереди</span>'
-    : job.status === 'done' ? '<span class="st st-done">готово</span>'
-    : job.status === 'error' ? '<span class="st st-error">ошибка</span>' : '';
-  document.getElementById('prog-status').innerHTML = st;
+  document.getElementById('prog-status').innerHTML = pill(job);
   const stages = job.stages || {};
   document.getElementById('prog-list').innerHTML = STAGES.map(s =>
     '<div class="prog">' + dotMark(stages[s.k] || 'pending') + esc(s.label) + '</div>'
@@ -196,7 +233,7 @@ async function refresh() {
     const r = await fetch('/api/scans');
     const jobs = await r.json();
     const tb = document.getElementById('rows');
-    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">Задач пока нет</td></tr>'; updateSelected(); renderProg(null); renderSum(null); return; }
+    if (!jobs.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">Задач пока нет</td></tr>'; updateSelected(); renderProg(null); renderResults(jobs); return; }
     // активная задача: прежняя (если ещё в списке) или самая свежая
     const wasActive = activeJob ? jobs.find(j => j.id === activeJob.id) : null;
     if (!wasActive) activeJob = jobs[0];
@@ -210,12 +247,13 @@ async function refresh() {
       return `<tr data-id="${esc(j.id)}" class="${sel}" onclick="selectJob(window._jobs['${esc(j.id)}'])">
         <td class="chk" onclick="event.stopPropagation()">${chk}</td>
         <td>${esc(j.id)}</td><td>${esc(j.target)}</td>
-        <td><span class="st st-${esc(j.status)}">${esc(j.status)}</span></td>
+        <td>${pill(j)}</td>
         <td>${esc(j.stage || '')}${err ? ' <span style="color:#f87171">'+esc(j.error||'')+'</span>' : ''}</td>
         <td>${fmtLocal(j.created_at)}</td><td onclick="event.stopPropagation()">${report}</td></tr>`;
     }).join('');
     window._jobs = {}; jobs.forEach(j => window._jobs[j.id] = j);
     selectJob(activeJob);
+    renderResults(jobs);
     updateSelected();
   } catch(e) {}
 }
