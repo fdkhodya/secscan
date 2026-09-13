@@ -17,7 +17,8 @@
 
 Все виды проверок выполняются при каждом скане. В главной странице панель
 «Ход сканирования» показывает статус каждого этапа выбранной задачи: серый —
-ждёт, жёлтый — выполняется, зелёный ✓ — готово, красный — ошибка этапа.
+ждёт, жёлтый — выполняется, зелёный ✓ — готово, красный ✕ — ошибка этапа,
+серый «–» — движка нет в образе (режим «всё в одном», см. ниже).
 
 Ввод цели: `192.168.7.7`, `example.com` или `https://example.com`.
 Если это URL — nmap сканирует хост, а ZAP/nuclei дополнительно проверяют
@@ -38,15 +39,50 @@ TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить п�
 
 - Один Go-сервис (веб + очередь задач + агрегация отчётов), файловое хранилище
   задач в `data/jobs/*.json` (без СУБД).
-- Все сканеры выполняются как разовые docker-контейнеры через docker.sock
-  хоста (`--network host` на Linux); образы подтягиваются при первом
-  использовании. Шаблоны nuclei кэшируются в `data/nuclei-templates`.
+- Два режима запуска движков (`SECSCAN_ENGINE_MODE`, см. `engines.go`):
+  * `docker` (по умолчанию) — каждый сканер выполняется разовым
+    docker-контейнером через docker.sock хоста (`--network host` на Linux);
+    образы подтягиваются при первом использовании. Требует Linux-хост со
+    смонтированным `docker.sock` (для сканирования LAN как с самого хоста);
+  * `local` — сканеры запускаются обычными процессами внутри этого же
+    контейнера. Так собирается образ «всё в одном» (`Dockerfile.allinone`:
+    nmap + ZAP + nuclei + testssl.sh в одном образе) — он работает и на
+    Docker Desktop (macOS/Windows), где `docker.sock` из контейнера
+    недоступен, а `--network host` не действует. Отсутствующий движок даёт
+    не ошибку, а статус этапа «пропущен» (–).
+  Шаблоны nuclei кэшируются в `data/nuclei-templates`.
 - Находки всех сканеров приводятся к единой модели (severity:
   critical/high/medium/low/info, CVE, CVSS, описание, рекомендация «как
   исправить», доказательства). Отчёт сортируется по критичности.
 - Авторизация: один пользователь (SECSCAN_USER/SECSCAN_PASS), сессия в cookie.
 
-## Запуск (docker)
+## Запуск: всё в одном контейнере (macOS/Windows, Docker Desktop)
+
+    cd <каталог проекта>
+    cp .env.example .env        # задайте SECSCAN_PASS
+    docker compose -f docker-compose.allinone.yml up -d --build
+    # http://localhost:8510
+
+Всё сканирование идёт внутри ОДНОГО контейнера: `nmap`, `nmap -sU`,
+`zap-baseline.py`, `testssl.sh` и `nuclei` лежат в самом образе и запускаются
+как локальные процессы (`SECSCAN_ENGINE_MODE=local`). Ни `docker.sock`, ни
+`--network host`, ни `SECSCAN_HOST_DATA` не нужны — поэтому этот вариант
+работает на macOS (Docker Desktop), где разовые контейнеры-сканеры через
+docker.sock не поднимаются.
+
+Образ собирается из `Dockerfile.allinone`: база — официальный
+`ghcr.io/zaproxy/zaproxy:stable` (Debian + Java + ZAP), в неё добавляются nmap,
+nuclei v2.9.14 и testssl.sh 3.2.4. Архитектура выбирается автоматически
+(`TARGETARCH`), так что сборка работает и на Apple Silicon (arm64), и на x86.
+
+Оговорки для Docker Desktop/macOS:
+- сканирование LAN-адресов идёт через NAT Docker Desktop: TCP-порты и веб-сайты
+  видны нормально, UDP-скан (`-sU`) и определение ОС (`-O`) через NAT
+  ненадёжны — этап UDP может дать пустой результат;
+- сама машина с Docker снаружи контейнера не «localhost» — цель задавайте
+  IP-адресом машины в LAN (например `192.168.7.2`), а не `127.0.0.1`.
+
+## Запуск на Linux-сервере (разовые контейнеры-сканеры)
 
     cd /opt/projects/secscan
     cp .env.example .env        # задайте SECSCAN_PASS
@@ -61,8 +97,10 @@ TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить п�
 Образы по умолчанию: `instrumentisto/nmap:latest`,
 `ghcr.io/zaproxy/zaproxy:stable`, `projectdiscovery/nuclei:v2.9.14`
 (v3 падает SIGILL на старых CPU), `drwetter/testssl.sh:latest`
-(переопределяются env `SECSCAN_*_IMAGE`). На Windows Docker Desktop задайте
-`SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается.
+(переопределяются env `SECSCAN_*_IMAGE`; в режиме «всё в одном» не
+используются — движки уже внутри образа). На Windows Docker Desktop задайте
+`SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается,
+либо переходите на вариант «всё в одном».
 
 ## Разработка (без docker)
 
@@ -88,7 +126,8 @@ TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить п�
     auth.go          — сессии (логин/пароль из env)
     store.go         — файловое хранилище задач
     engine.go        — очередь и исполнение скана (nmap → udp → zap → ssl → nuclei)
-    scanners.go      — docker-обёртка, nmap TCP/UDP (XML), доп. NSE-скрипты
+    engines.go       — режимы запуска движков: docker (разовые контейнеры) / local
+    scanners.go      — обёртка docker run, nmap TCP/UDP (XML), доп. NSE-скрипты
     discovery.go     — поиск сайтов на IP цели (TLS SAN + crt.sh/certspotter), списки целей
     ssl.go           — TLS/SSL-анализ (testssl.sh, JSON)
     nuclei.go        — сигнатурный скан (nuclei, JSONL)
@@ -97,4 +136,5 @@ TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить п�
     models.go        — модель находки/задачи, сортировка по критичности
     report.go        — рендер HTML-отчёта
     web/             — шаблоны (login, index, report)
-    docker-compose.yml — сервис secscan (сканеры — разовые контейнеры)
+    docker-compose.yml            — Linux-сервер: сканеры разовыми контейнерами
+    Dockerfile.allinone + docker-compose.allinone.yml — «всё в одном» (macOS/Windows)

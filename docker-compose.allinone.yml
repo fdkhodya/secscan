@@ -1,0 +1,37 @@
+# secscan «всё в одном» — один контейнер: веб-интерфейс + все движки-сканеры
+# (nmap, OWASP ZAP, nuclei, testssl.sh) внутри него.
+#
+#   cp .env.example .env        # задайте SECSCAN_PASS
+#   docker compose -f docker-compose.allinone.yml up -d --build
+#   # http://localhost:8510
+#
+# Отличия от docker-compose.yml (вариант для Linux-сервера):
+#   * docker.sock НЕ нужен, --network host НЕ нужен;
+#   * SECSCAN_ENGINE_MODE=local — движки запускаются процессами внутри этого
+#     же контейнера (см. engines.go), поэтому нет ни монтирований, ни
+#     хостовых путей (SECSCAN_HOST_DATA игнорируется);
+#   * работает на macOS/Windows (Docker Desktop), где разовые
+#     контейнеры-сканеры через docker.sock не поднимаются.
+services:
+  secscan:
+    build:
+      context: .
+      dockerfile: Dockerfile.allinone
+    image: secscan:allinone
+    container_name: secscan
+    restart: always
+    ports:
+      - "8510:8510"
+    environment:
+      SECSCAN_USER: ${SECSCAN_USER:-admin}
+      SECSCAN_PASS: ${SECSCAN_PASS:?укажите SECSCAN_PASS в .env}
+      SECSCAN_DATA: /data
+      # движки внутри этого же контейнера (нет docker.sock / --network host)
+      SECSCAN_ENGINE_MODE: local
+      # локальный часовой пояс (времена задач: список, отчёты, PDF)
+      SECSCAN_TZ: ${SECSCAN_TZ:-Asia/Yekaterinburg}
+      # поиск соседних сайтов на IP цели (TLS + crt.sh)
+      SECSCAN_CRTSH: ${SECSCAN_CRTSH:-1}
+    volumes:
+      # история сканов, шаблоны nuclei и рабочие каталоги движков
+      - ./data:/data

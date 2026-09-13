@@ -88,7 +88,8 @@ type Job struct {
 	StartedAt string `json:"started_at,omitempty"`
 	DoneAt    string `json:"done_at,omitempty"`
 	// Stages — статусы этапов (все виды проверок выполняются всегда):
-	// tcp, udp, zap, ssl, nuclei → pending|running|done|error.
+	// tcp, udp, zap, ssl, nuclei → pending|running|done|error|skipped
+	// (skipped — движка нет в образе, режим «всё в одном контейнере»).
 	Stages   map[string]string `json:"stages,omitempty"`
 	Findings []Finding         `json:"findings,omitempty"`
 }

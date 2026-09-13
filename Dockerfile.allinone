@@ -1,0 +1,85 @@
+# secscan «всё в одном»: веб-интерфейс и ВСЕ движки-сканеры (nmap, OWASP ZAP,
+# nuclei, testssl.sh) внутри ОДНОГО контейнера.
+#
+#   docker compose -f docker-compose.allinone.yml up -d --build
+#
+# Движки запускаются обычными процессами внутри контейнера
+# (SECSCAN_ENGINE_MODE=local, см. engines.go): ни docker.sock, ни
+# --network host не нужны — поэтому образ работает и на Docker Desktop
+# (macOS/Windows), где разовые контейнеры-сканеры через docker.sock не
+# поднимаются, а --network host недоступен.
+#
+# Секреты — из .env рядом с этим файлом (SECSCAN_PASS и др.).
+
+# ---- сборка secscan ----
+FROM golang:1.22-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
+COPY web/ web/
+COPY assets/ assets/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /secscan .
+
+# ---- рантайм: secscan + все движки ----
+# База — официальный образ ZAP: Debian 12 + Java 17 + python3 + сам ZAP
+# (ZAP — единственный движок, который нельзя поставить «поверх» Alpine:
+# ему нужны glibc и JVM). Остальные движки доставляются в этот же образ.
+FROM ghcr.io/zaproxy/zaproxy:stable AS runtime
+
+ARG TARGETARCH=amd64
+ARG NUCLEI_VERSION=2.9.14
+ARG TESTSSL_VERSION=3.2.4
+
+# Образ ZAP по умолчанию работает от пользователя zap (uid 1000), а secscan
+# пишет данные в /data и запускает движки — работаем от root, как и обычный
+# образ secscan (docker-compose.yml).
+USER root
+# /zap — сам ZAP (zap-baseline.py), /opt/testssl — testssl.sh
+ENV PATH=/zap:/opt/testssl:${PATH} \
+    DEBIAN_FRONTEND=noninteractive
+
+# nmap (TCP/UDP-порты, NSE) + зависимости testssl.sh (openssl, dig, hexdump,
+# procps) + утилиты для установки движков
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        nmap ca-certificates curl unzip bash openssl dnsutils bsdextrautils \
+        procps util-linux tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# nuclei — сигнатурный веб-сканер (v2.9.14: v3 падает SIGILL на части CPU)
+RUN curl -fsSL -o /tmp/nuclei.zip \
+        "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" \
+    && unzip -q /tmp/nuclei.zip -d /usr/local/bin nuclei \
+    && chmod 0755 /usr/local/bin/nuclei \
+    && rm -f /tmp/nuclei.zip
+
+# testssl.sh — версия 3.2.4: ровно та, что в образе drwetter/testssl.sh:latest,
+# на её JSON настроен разбор в ssl.go
+RUN mkdir -p /opt/testssl \
+    && curl -fsSL -o /tmp/testssl.tgz \
+        "https://github.com/drwetter/testssl.sh/archive/refs/tags/v${TESTSSL_VERSION}.tar.gz" \
+    && tar -xzf /tmp/testssl.tgz --strip-components=1 -C /opt/testssl \
+    && chmod 0755 /opt/testssl/testssl.sh \
+    && rm -f /tmp/testssl.tgz
+
+COPY --from=build /secscan /usr/local/bin/secscan
+
+# zap-baseline.py отказывается писать отчёт в каталог, который не является
+# точкой монтирования (проверка os.path.ismount в zap_common.py). В
+# docker-режиме каталог задачи монтируется в /zap/wrk, а здесь монтирований
+# нет — поэтому объявляем /zap/wrk как VOLUME: docker монтирует туда
+# служебный том, и ZAP соглашается писать отчёт (secscan затем переносит
+# его в каталог задачи, см. zapScan в scanners.go).
+VOLUME ["/zap/wrk"]
+
+# Движки — локальные процессы, поэтому SECSCAN_HOST_DATA не нужен: хостовые
+# пути и монтирования в этом режиме не используются вовсе.
+ENV SECSCAN_DATA=/data \
+    SECSCAN_LISTEN=:8510 \
+    SECSCAN_ENGINE_MODE=local
+RUN mkdir -p /data /zap/wrk
+
+EXPOSE 8510
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
+  CMD curl -fsS http://127.0.0.1:8510/healthz || exit 1
+ENTRYPOINT ["/usr/local/bin/secscan"]
