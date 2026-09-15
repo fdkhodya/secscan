@@ -79,7 +79,7 @@ func loadConfig() Config {
 		EngineIO:        envOr("SECSCAN_ENGINE_IO", ioModeVolume),
 		TemplatesVolume: envOr("SECSCAN_TEMPLATES_VOLUME", "secscan-templates"),
 		VolumePrefix:    envOr("SECSCAN_VOLUME_PREFIX", "secscan-job-"),
-		Crtsh:       envOr("SECSCAN_CRTSH", "1") != "0",
+		Crtsh:           envOr("SECSCAN_CRTSH", "1") != "0",
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"
