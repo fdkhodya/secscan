@@ -1,10 +1,8 @@
 package main
 
 // Сигнатурный веб-сканер nuclei (projectdiscovery) — лёгкая замена
-// тяжёлому OpenVAS/Greenbone: тысячи шаблонов уязвимостей. Запускается
-// разовым docker-контейнером (SECSCAN_ENGINE_MODE=docker) или локальным
-// процессом внутри контейнера secscan (local, образ «всё в одном»);
-// шаблоны кэшируются в data/nuclei-templates.
+// тяжёлому OpenVAS/Greenbone: тысячи шаблонов уязвимостей, запускается
+// разовым docker-контейнером, шаблоны кэшируются в data/nuclei-templates.
 
 import (
 	"archive/zip"
@@ -78,25 +76,17 @@ func nucleiScan(ctx context.Context, cfg *Config, jobID string, targets []string
 
 	outFile := filepath.Join(workDir, "nuclei.jsonl")
 	_ = os.Remove(outFile)
-	// docker-режим: шаблоны и рабочий каталог монтируются в контейнер nuclei;
-	// local-режим: те же каталоги этого контейнера (монтирований нет)
-	tmplArg, outArg := "/root/nuclei-templates", "/out/nuclei.jsonl"
 	mounts := []string{tmplDir + ":/root/nuclei-templates", workDir + ":/out"}
-	if cfg.LocalEngines() {
-		tmplArg, outArg = tmplDir, outFile
-	}
 	args := []string{
 		"-jsonl", "-silent", "-nc",
 		"-c", "25", "-timeout", "10", "-retries", "1",
-		"-t", tmplArg,
-		"-o", outArg,
+		"-t", "/root/nuclei-templates",
+		"-o", "/out/nuclei.jsonl",
 	}
 	for _, u := range targets {
 		args = append(args, "-u", u)
 	}
-	_, errOut, err := cfg.runEngine(ctx, engineRun{
-		image: cfg.NucleiImage, bin: cfg.BinNuclei, mounts: mounts, args: args,
-	})
+	_, errOut, err := runDocker(ctx, cfg.NucleiImage, cfg.DockerNet, mounts, args)
 	if err != nil {
 		// nuclei пишет результаты по мере работы; при ошибке файл может
 		// уже существовать — парсим его, иначе возвращаем ошибку

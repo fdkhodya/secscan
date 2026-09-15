@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -31,21 +30,6 @@ type Config struct {
 	// (Certificate Transparency) + TLS-сертификаты; 0 — только nmap/ZAP
 	// по цели.
 	Crtsh bool
-	// EngineMode — как запускаются движки-сканеры: "docker" (по умолчанию,
-	// разовыми контейнерами через docker.sock, Linux-сервер) или "local"
-	// (процессами внутри этого же контейнера — образ «всё в одном» для
-	// Docker Desktop/macOS, см. engines.go).
-	EngineMode string
-	// Пути к движкам для режима local (в docker-режиме не используются).
-	BinNmap    string
-	BinZap     string
-	BinNuclei  string
-	BinTestssl string
-	// ZapWorkDir — каталог, в котором zap-baseline.py запускается в
-	// local-режиме: скрипт отказывается писать отчёт в каталог, который не
-	// является точкой монтирования (см. zap_common.py), а в образе
-	// Dockerfile.allinone для этого объявлен VOLUME /zap/wrk.
-	ZapWorkDir string
 }
 
 func envOr(key, def string) string {
@@ -83,16 +67,6 @@ func loadConfig() Config {
 		SslImage:    envOr("SECSCAN_SSL_IMAGE", "drwetter/testssl.sh:latest"),
 		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
 		Crtsh:       envOr("SECSCAN_CRTSH", "1") != "0",
-		EngineMode:  strings.ToLower(strings.TrimSpace(envOr("SECSCAN_ENGINE_MODE", "docker"))),
-		BinNmap:     envOr("SECSCAN_NMAP_BIN", "nmap"),
-		BinZap:      envOr("SECSCAN_ZAP_BIN", "zap-baseline.py"),
-		BinNuclei:   envOr("SECSCAN_NUCLEI_BIN", "nuclei"),
-		BinTestssl:  envOr("SECSCAN_SSL_BIN", "testssl.sh"),
-		ZapWorkDir:  envOr("SECSCAN_ZAP_WORKDIR", "/zap/wrk"),
-	}
-	if cfg.EngineMode != "docker" && cfg.EngineMode != "local" {
-		log.Printf("ВНИМАНИЕ: неизвестный SECSCAN_ENGINE_MODE=%q — использую docker", cfg.EngineMode)
-		cfg.EngineMode = "docker"
 	}
 	if cfg.Pass == "" {
 		cfg.Pass = "admin"
@@ -212,8 +186,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
-	log.Printf("secscan listening on %s (data: %s, host-data: %s, движки: %s)",
-		cfg.Listen, cfg.DataDir, cfg.HostDataDir, cfg.EngineMode)
+	log.Printf("secscan listening on %s (data: %s, host-data: %s)", cfg.Listen, cfg.DataDir, cfg.HostDataDir)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

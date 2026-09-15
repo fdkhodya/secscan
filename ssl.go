@@ -1,10 +1,9 @@
 package main
 
 // TLS/SSL-анализ https-целей через testssl.sh (docker-образ
-// drwetter/testssl.sh либо локальный testssl.sh внутри контейнера secscan).
-// Проверяются протоколы (-p), параметры сервера (-S) и security-заголовки
-// (-h); результат — в JSON (--json-pretty), из которого берутся находки с
-// severity ниже OK/INFO.
+// drwetter/testssl.sh). Проверяются протоколы (-p), параметры сервера (-S)
+// и security-заголовки (-h); результат — в JSON (--json-pretty), из которого
+// берутся находки с severity ниже OK/INFO.
 
 import (
 	"context"
@@ -34,22 +33,13 @@ func sslScan(ctx context.Context, cfg *Config, jobID string, idx int, targetURL 
 	outFile := fmt.Sprintf("ssl-%d.json", idx)
 	outPath := filepath.Join(workDir, outFile)
 	_ = os.Remove(outPath)
-	// docker-режим: workDir примонтирован в /out; local-режим: пишем по тому
-	// же пути внутри этого контейнера (монтирований нет)
-	run := engineRun{
-		image:  cfg.SslImage,
-		bin:    cfg.BinTestssl,
-		mounts: []string{workDir + ":/out"},
-		args: []string{
-			"--jsonfile-pretty=/out/" + outFile,
-			"-p", "-S", "-h",
-			targetURL,
-		},
+	mount := workDir + ":/out"
+	args := []string{
+		"--jsonfile-pretty=/out/" + outFile,
+		"-p", "-S", "-h",
+		targetURL,
 	}
-	if cfg.LocalEngines() {
-		run.args[0] = "--jsonfile-pretty=" + outPath
-	}
-	_, errOut, err := cfg.runEngine(ctx, run)
+	_, errOut, err := runDocker(ctx, cfg.SslImage, cfg.DockerNet, []string{mount}, args)
 	if err != nil {
 		// при недоступной цели testssl может не создать JSON — тогда ошибка;
 		// иначе (JSON есть) результат парсим независимо от кода возврата

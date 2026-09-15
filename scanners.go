@@ -15,10 +15,8 @@ import (
 	"strings"
 )
 
-// ---------- запуск движков-сканеров (docker или локально) ----------
+// ---------- общий запуск docker-контейнеров-сканеров ----------
 
-// runDocker запускает движок разовым docker-контейнером через docker.sock
-// хоста (режим SECSCAN_ENGINE_MODE=docker; для local-режима см. engines.go).
 func runDocker(ctx context.Context, image, network string, mounts []string, cmdArgs []string) (stdout, stderr string, err error) {
 	args := []string{"run", "--rm"}
 	if network == "host" {
@@ -99,9 +97,7 @@ func nmapScan(ctx context.Context, cfg *Config, host string, vulners, nse bool) 
 		args = append(args, "--script", strings.Join(scripts, ","))
 	}
 	args = append(args, host)
-	out, errOut, err := cfg.runEngine(ctx, engineRun{
-		image: cfg.NmapImage, bin: cfg.BinNmap, args: args,
-	})
+	out, errOut, err := runDocker(ctx, cfg.NmapImage, cfg.DockerNet, nil, args)
 	if err != nil {
 		// nmap может вернуть ненулевой код при частичном скане (rc>0),
 		// XML при этом часто валиден — пробуем распарсить.
@@ -116,15 +112,13 @@ func nmapScan(ctx context.Context, cfg *Config, host string, vulners, nse bool) 
 	return findings, webPorts, nil
 }
 
-// nmapUDPScan — сканирование топ-50 UDP-портов (выполняется всегда).
-func nmapUDPScan(ctx context.Context, cfg *Config, host string) ([]Finding, error) {
+// nmapUDPScan — сканирование топ-50 UDP-портов (по тумблеру).
+func nmapUDPScan(ctx context.Context, image, network, host string) ([]Finding, error) {
 	args := []string{
 		"-Pn", "-sU", "-T4", "--top-ports", "50", "--open",
 		"--host-timeout", "10m", "-oX", "-", host,
 	}
-	out, errOut, err := cfg.runEngine(ctx, engineRun{
-		image: cfg.NmapImage, bin: cfg.BinNmap, args: args,
-	})
+	out, errOut, err := runDocker(ctx, image, network, nil, args)
 	if err != nil {
 		if !strings.Contains(out, "<nmaprun") {
 			return nil, fmt.Errorf("nmap-udp: %v: %s", err, tail(errOut, 1500))
@@ -447,8 +441,8 @@ type zapInstance struct {
 }
 
 // zapScan запускает zap-baseline против одного URL.
-func zapScan(ctx context.Context, cfg *Config, jobID, targetURL string) ([]Finding, error) {
-	workDir := filepath.Join(cfg.HostDataDir, "work", jobID)
+func zapScan(ctx context.Context, image, network, hostDataDir, jobID, targetURL string) ([]Finding, error) {
+	workDir := filepath.Join(hostDataDir, "work", jobID)
 	if err := os.MkdirAll(workDir, 0o777); err != nil {
 		return nil, err
 	}
@@ -460,37 +454,16 @@ func zapScan(ctx context.Context, cfg *Config, jobID, targetURL string) ([]Findi
 	}
 	reportJSON := filepath.Join(workDir, "zap.json")
 	_ = os.Remove(reportJSON)
-	// Каталог, в который zap-baseline.py положит отчёт "zap.json".
-	outDir := workDir
-	run := engineRun{
-		image:     cfg.ZapImage,
-		bin:       cfg.BinZap,
-		dockerCmd: "zap-baseline.py",
-		mounts:    []string{workDir + ":/zap/wrk"},
+	mount := workDir + ":/zap/wrk"
+	args := []string{
+		"zap-baseline.py", "-t", targetURL,
 		// Имя файла ОТНОСИТЕЛЬНОЕ: абсолютный путь (-J /zap/wrk/zap.json)
 		// ломает генерацию отчёта — automation-фреймворк склеивает reportDir
-		// с reportFile и пишет в /zap/wrk/zap/wrk/zap.json
-		// (NoSuchFileException). Отчёт всегда ложится в рабочий каталог
-		// процесса (cwd), поэтому в local-режиме меняем cwd, а не путь.
-		args: []string{"-t", targetURL, "-J", "zap.json"},
+		// с reportFile и пишет в /zap/wrk/zap/wrk/zap.json (NoSuchFileException).
+		// zap-baseline кладёт zap.json в /zap/wrk (смонтированный workDir).
+		"-J", "zap.json",
 	}
-	if cfg.LocalEngines() {
-		// zap-baseline.py отказывается писать отчёт в каталог, который не
-		// является точкой монтирования (проверка os.path.ismount в
-		// zap_common.py; в docker-режиме каталог задачи и так смонтирован в
-		// /zap/wrk). В образе Dockerfile.allinone для этого объявлен
-		// VOLUME /zap/wrk — запускаем ZAP там и переносим отчёт в каталог
-		// задачи.
-		outDir = cfg.ZapWorkDir
-		run.dir = outDir
-	}
-	_, errOut, err := cfg.runEngine(ctx, run)
-	if outDir != workDir {
-		if b, rerr := os.ReadFile(filepath.Join(outDir, "zap.json")); rerr == nil {
-			_ = os.WriteFile(reportJSON, b, 0o644)
-			_ = os.Remove(filepath.Join(outDir, "zap.json"))
-		}
-	}
+	_, errOut, err := runDocker(ctx, image, network, []string{mount}, args)
 	if err != nil {
 		// zap-baseline: rc=0 — PASS, rc=1 — найдены FAIL, rc=2 — найдены WARN:
 		// штатные завершения, отчёт zap.json при этом создаётся. Ошибка —
