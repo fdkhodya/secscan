@@ -53,16 +53,28 @@ TCP+UDP с NSE-скриптами, ZAP, TLS/SSL, nuclei); отключить п�
     docker compose up -d --build
     # http://<server>:8510
 
-Контейнеру нужен доступ к `/var/run/docker.sock` (запуск сканеров) и bind
-`./data` на хосте — рабочие каталоги сканеров монтируются по
-`SECSCAN_HOST_DATA` (по умолчанию `/opt/projects/secscan/data`; путь внутри
-контейнера дублирует хостовый — см. docker-compose.yml).
+Контейнеру нужен доступ к `/var/run/docker.sock` (запуск сканеров). Файлы
+движков (отчёты ZAP/testssl.sh, шаблоны nuclei) по умолчанию живут в
+docker-томах — `SECSCAN_ENGINE_IO=volume`: том создаёт и обслуживает сам
+демон, поэтому раскладка файлов на хосте не важна, и сканер работает на любом
+демоне, включая Docker Desktop (macOS/Windows), rootless-docker, NAS и
+удалённый демон. В прежнем режиме (`SECSCAN_ENGINE_IO=host`) движки монтируют
+каталоги хоста `SECSCAN_HOST_DATA/work/<job>` — такой путь должен существовать
+на хосте И быть виден демону; где демон хостовых путей не видит (Docker
+Desktop/rootless), контейнер не создаётся: exit status 125, «bind source path
+does not exist» / «Mounts denied».
+Тома: `secscan-templates` (шаблоны nuclei, постоянный — nuclei ставит их туда
+сам при первом запуске) и `secscan-job-<id>` (рабочие файлы задачи, удаляется
+по завершении); имена переопределяются `SECSCAN_TEMPLATES_VOLUME` и
+`SECSCAN_VOLUME_PREFIX`.
 
 Образы по умолчанию: `instrumentisto/nmap:latest`,
 `ghcr.io/zaproxy/zaproxy:stable`, `projectdiscovery/nuclei:v2.9.14`
 (v3 падает SIGILL на старых CPU), `drwetter/testssl.sh:latest`
 (переопределяются env `SECSCAN_*_IMAGE`). На Windows Docker Desktop задайте
-`SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается.
+`SECSCAN_DOCKER_NETWORK=` (пусто) — `--network host` там не поддерживается
+(если демон всё же отвечает «network host not found», secscan сам повторит
+запуск в bridge-сети).
 
 ## Разработка (без docker)
 

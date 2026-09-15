@@ -44,65 +44,58 @@ type nucleiResult struct {
 }
 
 // nucleiScan запускает nuclei по списку веб-целей и собирает находки.
+// Шаблоны живут в постоянном docker-томе (volume-режим): nuclei ставит их туда
+// сам при первом запуске; результаты приходят на stdout в JSONL, поэтому
+// отдельный рабочий каталог этапу не нужен.
 func nucleiScan(ctx context.Context, cfg *Config, jobID string, targets []string, progress func(string)) ([]Finding, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("нет целей")
 	}
-	workDir := filepath.Join(cfg.HostDataDir, "work", jobID)
-	if err := os.MkdirAll(workDir, 0o777); err != nil {
-		return nil, err
-	}
-	_ = os.Chmod(workDir, 0o777)
-
-	// шаблоны nuclei кэшируем между запусками
-	tmplDir := filepath.Join(cfg.HostDataDir, "nuclei-templates")
-	if err := os.MkdirAll(tmplDir, 0o777); err != nil {
-		return nil, err
-	}
-	_ = os.Chmod(tmplDir, 0o777)
-
-	empty, err := dirEmpty(tmplDir)
-	if err != nil {
-		return nil, err
-	}
-	if empty {
-		progress("nuclei: скачивание шаблонов (первый запуск)")
-		// nuclei v3 не ставит шаблоны в пустой каталог сам — качаем и
-		// распаковываем архив напрямую с GitHub
-		if err := installNucleiTemplates(ctx, tmplDir); err != nil {
-			return nil, fmt.Errorf("nuclei: не удалось скачать шаблоны: %w", err)
+	tmplMount := templatesMount(cfg, "/root/nuclei-templates")
+	if volumeMode(cfg) {
+		progress("nuclei: шаблоны — том " + templatesVolume(cfg) + " (первый запуск скачает шаблоны)")
+	} else {
+		// host-режим: шаблоны качаем сами (nuclei не ставит их в пустой каталог)
+		tmplDir := filepath.Join(cfg.HostDataDir, "nuclei-templates")
+		if err := os.MkdirAll(tmplDir, 0o777); err != nil {
+			return nil, err
+		}
+		_ = os.Chmod(tmplDir, 0o777)
+		empty, err := dirEmpty(tmplDir)
+		if err != nil {
+			return nil, err
+		}
+		if empty {
+			progress("nuclei: скачивание шаблонов (первый запуск)")
+			// nuclei v3 не ставит шаблоны в пустой каталог сам — качаем и
+			// распаковываем архив напрямую с GitHub
+			if err := installNucleiTemplates(ctx, tmplDir); err != nil {
+				return nil, fmt.Errorf("nuclei: не удалось скачать шаблоны: %w", err)
+			}
 		}
 	}
 
-	outFile := filepath.Join(workDir, "nuclei.jsonl")
-	_ = os.Remove(outFile)
-	mounts := []string{tmplDir + ":/root/nuclei-templates", workDir + ":/out"}
 	args := []string{
 		"-jsonl", "-silent", "-nc",
 		"-c", "25", "-timeout", "10", "-retries", "1",
-		"-t", "/root/nuclei-templates",
-		"-o", "/out/nuclei.jsonl",
+	}
+	if !volumeMode(cfg) {
+		args = append(args, "-t", "/root/nuclei-templates")
 	}
 	for _, u := range targets {
 		args = append(args, "-u", u)
 	}
-	_, errOut, err := runDocker(ctx, cfg.NucleiImage, cfg.DockerNet, mounts, args)
-	if err != nil {
-		// nuclei пишет результаты по мере работы; при ошибке файл может
-		// уже существовать — парсим его, иначе возвращаем ошибку
-		if _, statErr := os.Stat(outFile); statErr != nil {
-			return nil, fmt.Errorf("nuclei: %v: %s", err, tail(errOut, 1500))
-		}
+	// без -o результаты идут в stdout (JSONL)
+	stdout, errOut, err := runDocker(ctx, cfg.NucleiImage, cfg.DockerNet, []string{tmplMount}, args)
+	if err != nil && strings.TrimSpace(stdout) == "" {
+		// результатов нет вовсе — контейнер не отработал
+		return nil, fmt.Errorf("nuclei: %s", dockerFailure(err, stdout, errOut))
 	}
-	f, err := os.Open(outFile)
-	if err != nil {
-		return nil, fmt.Errorf("nuclei: результаты не созданы: %w", err)
-	}
-	defer f.Close()
+	// при сбое docker часть результатов могла уже прийти в stdout — парсим их
 
 	var out []Finding
 	seen := map[string]bool{}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(strings.NewReader(stdout))
 	sc.Buffer(make([]byte, 0, 1<<20), 2<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())

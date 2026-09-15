@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,31 +23,29 @@ const maxSSLFindingsPerTarget = 30
 
 // sslScan запускает testssl.sh против одной https-цели.
 func sslScan(ctx context.Context, cfg *Config, jobID string, idx int, targetURL string) ([]Finding, error) {
-	workDir := filepath.Join(cfg.HostDataDir, "work", jobID)
-	if err := os.MkdirAll(workDir, 0o777); err != nil {
+	// JSON testssl.sh пишется в смонтированный рабочий каталог задачи (/out):
+	// в режиме томов это docker-том задачи (создан в prepareJobVolume, здесь
+	// открываем его на запись для uid 1000 testssl).
+	fileName := fmt.Sprintf("ssl-%d.json", idx)
+	containerPath := "/out/" + fileName
+	if err := chmodJobVolume(ctx, cfg, cfg.SslImage, jobID); err != nil {
 		return nil, err
 	}
-	_ = os.Chmod(workDir, 0o777)
-	outFile := fmt.Sprintf("ssl-%d.json", idx)
-	outPath := filepath.Join(workDir, outFile)
-	_ = os.Remove(outPath)
-	mount := workDir + ":/out"
+	mount := jobMount(cfg, jobID, "/out")
 	args := []string{
-		"--jsonfile-pretty=/out/" + outFile,
+		"--jsonfile-pretty=" + containerPath,
 		"-p", "-S", "-h",
 		targetURL,
 	}
-	_, errOut, err := runDocker(ctx, cfg.SslImage, cfg.DockerNet, []string{mount}, args)
-	if err != nil {
+	stdout, errOut, err := runDocker(ctx, cfg.SslImage, cfg.DockerNet, []string{mount}, args)
+	b, readErr := readArtifact(ctx, cfg, cfg.SslImage, jobID, fileName, containerPath)
+	if readErr != nil {
 		// при недоступной цели testssl может не создать JSON — тогда ошибка;
 		// иначе (JSON есть) результат парсим независимо от кода возврата
-		if _, statErr := os.Stat(outPath); statErr != nil {
-			return nil, fmt.Errorf("testssl: %v: %s", err, tail(errOut, 1500))
+		if err != nil {
+			return nil, fmt.Errorf("testssl: %s (JSON не получен: %v)", dockerFailure(err, stdout, errOut), readErr)
 		}
-	}
-	b, err := os.ReadFile(outPath)
-	if err != nil {
-		return nil, fmt.Errorf("testssl: JSON не создан: %w", err)
+		return nil, fmt.Errorf("testssl: JSON не создан: %w", readErr)
 	}
 	return parseSSLReport(b, targetURL)
 }

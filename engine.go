@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -117,6 +115,14 @@ func (e *Engine) run(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Hour)
 	defer cancel()
 
+	// Рабочее хранилище движков: в режиме томов это docker-том задачи (том
+	// видит демон, раскладка файлов на хосте не важна), в host-режиме —
+	// каталог SECSCAN_HOST_DATA/work/<job>. Убирается в конце задачи.
+	if err := prepareJobVolume(ctx, e.cfg, id); err != nil {
+		log.Printf("job %s: подготовка рабочего хранилища движков: %v", id, err)
+	}
+	defer cleanupJobVolume(e.cfg, id)
+
 	// 1) nmap TCP: порты/сервисы + NSE (vulners CVE и доп. скрипты) — всегда
 	nmapFatal := false
 	nmapFindings, webPorts, err := nmapScan(ctx, e.cfg, j.Host, true, true)
@@ -165,7 +171,7 @@ func (e *Engine) run(id string) {
 			// у каждого сайта собственный бюджет; общий ctx не даёт
 			// одному медленному сайту съесть время остальных
 			uCtx, cancel := context.WithTimeout(ctx, zapTargetTimeout)
-			findings, err := zapScan(uCtx, e.cfg.ZapImage, e.cfg.DockerNet, e.cfg.HostDataDir, j.ID, u)
+			findings, err := zapScan(uCtx, e.cfg, j.ID, u)
 			cancel()
 			if err != nil {
 				zapErrs = append(zapErrs, u+": "+firstLine(err.Error()))
@@ -178,7 +184,7 @@ func (e *Engine) run(id string) {
 		msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
 		if len(zapErrs) > 0 {
 			msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(webURLs), strings.Join(zapErrs, "; "))
-			e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 600))
+			e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 1400))
 		} else {
 			e.set(j, "running", msg, "")
 		}
@@ -212,7 +218,7 @@ func (e *Engine) run(id string) {
 		}
 		if len(sslErrs) > 0 {
 			e.set(j, "running", "ssl: с ошибками",
-				"этап ssl: "+truncate("ssl: ошибки: "+strings.Join(sslErrs, "; "), 600))
+				"этап ssl: "+truncate("ssl: ошибки: "+strings.Join(sslErrs, "; "), 1400))
 			if len(sslErrs) >= len(sslURLs) {
 				e.setStage(j, "ssl", "error")
 			} else {
@@ -238,7 +244,7 @@ func (e *Engine) run(id string) {
 		})
 		cancel()
 		if err != nil {
-			e.set(j, "running", "nuclei: с ошибками", "этап nuclei: "+truncate(err.Error(), 600))
+			e.set(j, "running", "nuclei: с ошибками", "этап nuclei: "+truncate(err.Error(), 1400))
 			e.setStage(j, "nuclei", "error")
 		} else {
 			e.setStage(j, "nuclei", "done")
@@ -283,8 +289,9 @@ func (e *Engine) DeleteScans(ids []string) (int, error) {
 			return n, err
 		}
 		n++
-		// рабочие каталоги сканеров (best effort; в контейнере хост-пути может не быть)
-		_ = os.RemoveAll(filepath.Join(e.cfg.HostDataDir, "work", id))
+		// рабочее хранилище сканеров задачи: том (volume-режим) или каталог
+		// на хосте (host-режим) — best effort
+		cleanupJobVolume(e.cfg, id)
 	}
 	return n, nil
 }

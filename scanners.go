@@ -6,10 +6,9 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,8 +20,8 @@ func runDocker(ctx context.Context, image, network string, mounts []string, cmdA
 	args := []string{"run", "--rm"}
 	if network == "host" {
 		// Linux: сеть хоста (сканирование localhost и LAN как с самого хоста).
-		// Docker Desktop (Windows/macOS): --network host недоступен —
-		// задайте SECSCAN_DOCKER_NETWORK= (пусто) для bridge-сети.
+		// Docker Desktop (Windows/macOS): --network host недоступен — задайте
+		// SECSCAN_DOCKER_NETWORK= (пусто) для bridge-сети.
 		args = append(args, "--network", "host")
 	}
 	for _, m := range mounts {
@@ -30,7 +29,40 @@ func runDocker(ctx context.Context, image, network string, mounts []string, cmdA
 	}
 	args = append(args, image)
 	args = append(args, cmdArgs...)
-	return execCmd(ctx, "docker", args...)
+	stdout, stderr, err = execCmd(ctx, "docker", args...)
+	if err != nil && network == "host" && hostNetworkMissing(stderr) {
+		// демон без сети host (Docker Desktop с выключенным host-networking) —
+		// повторяем запуск в bridge-сети
+		log.Printf("docker: сеть host недоступна у демона — повтор в bridge-сети")
+		args = withoutHostNetwork(args)
+		stdout, stderr, err = execCmd(ctx, "docker", args...)
+	}
+	if err != nil {
+		// Полный вывод — в лог контейнера (docker logs secscan): в задачу
+		// попадает только короткая причина (dockerFailure), а тут остаётся всё,
+		// включая прогресс pull.
+		log.Printf("docker %s: %v\n%s", strings.Join(args, " "), err, head(stderr, 4000))
+	}
+	return stdout, stderr, err
+}
+
+// hostNetworkMissing — демон не знает сети "host".
+func hostNetworkMissing(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "network host not found") || strings.Contains(l, `network "host" not found`)
+}
+
+// withoutHostNetwork убирает из аргументов "docker run" флаг --network host.
+func withoutHostNetwork(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--network" && i+1 < len(args) && args[i+1] == "host" {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 func execCmd(ctx context.Context, name string, args ...string) (stdout, stderr string, err error) {
@@ -441,40 +473,34 @@ type zapInstance struct {
 }
 
 // zapScan запускает zap-baseline против одного URL.
-func zapScan(ctx context.Context, image, network, hostDataDir, jobID, targetURL string) ([]Finding, error) {
-	workDir := filepath.Join(hostDataDir, "work", jobID)
-	if err := os.MkdirAll(workDir, 0o777); err != nil {
+func zapScan(ctx context.Context, cfg *Config, jobID, targetURL string) ([]Finding, error) {
+	// Отчёт ZAP пишется в смонтированный рабочий каталог задачи (/zap/wrk):
+	// в режиме томов это docker-том задачи (том создаётся в prepareJobVolume,
+	// здесь только открываем его на запись для uid 1000 ZAP).
+	const reportName = "zap.json"
+	const containerPath = "/zap/wrk/" + reportName
+	if err := chmodJobVolume(ctx, cfg, cfg.ZapImage, jobID); err != nil {
 		return nil, err
 	}
-	// Каталог создаёт root (secscan/docker), а zap-контейнер пишет от своего
-	// пользователя (uid 1000 zap) — открываем на запись всем, иначе
-	// zap-baseline падает: Permission denied: '/zap/wrk/zap.yaml'.
-	if err := os.Chmod(workDir, 0o777); err != nil {
-		return nil, err
-	}
-	reportJSON := filepath.Join(workDir, "zap.json")
-	_ = os.Remove(reportJSON)
-	mount := workDir + ":/zap/wrk"
+	mount := jobMount(cfg, jobID, "/zap/wrk")
 	args := []string{
 		"zap-baseline.py", "-t", targetURL,
 		// Имя файла ОТНОСИТЕЛЬНОЕ: абсолютный путь (-J /zap/wrk/zap.json)
 		// ломает генерацию отчёта — automation-фреймворк склеивает reportDir
 		// с reportFile и пишет в /zap/wrk/zap/wrk/zap.json (NoSuchFileException).
-		// zap-baseline кладёт zap.json в /zap/wrk (смонтированный workDir).
-		"-J", "zap.json",
+		// zap-baseline кладёт zap.json в /zap/wrk (смонтированный каталог задачи).
+		"-J", reportName,
 	}
-	_, errOut, err := runDocker(ctx, image, network, []string{mount}, args)
-	if err != nil {
+	stdout, errOut, err := runDocker(ctx, cfg.ZapImage, cfg.DockerNet, []string{mount}, args)
+	b, readErr := readArtifact(ctx, cfg, cfg.ZapImage, jobID, reportName, containerPath)
+	if readErr != nil {
 		// zap-baseline: rc=0 — PASS, rc=1 — найдены FAIL, rc=2 — найдены WARN:
-		// штатные завершения, отчёт zap.json при этом создаётся. Ошибка —
-		// только если отчёта нет (rc=3+: ZAP не стартовал и т.п.).
-		if _, statErr := os.Stat(reportJSON); statErr != nil {
-			return nil, fmt.Errorf("zap: %v: %s", err, tail(errOut, 2000))
+		// штатные завершения, отчёт при этом создаётся. Ошибка — только если
+		// отчёта нет (rc=3+: ZAP не стартовал и т.п.).
+		if err != nil {
+			return nil, fmt.Errorf("zap: %s (отчёт не получен: %v)", dockerFailure(err, stdout, errOut), readErr)
 		}
-	}
-	b, err := os.ReadFile(reportJSON)
-	if err != nil {
-		return nil, fmt.Errorf("zap: отчёт не создан: %w", err)
+		return nil, fmt.Errorf("zap: отчёт не создан: %w", readErr)
 	}
 	var rep zapReport
 	if err := json.Unmarshal(b, &rep); err != nil {

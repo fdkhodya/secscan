@@ -26,6 +26,14 @@ type Config struct {
 	NucleiImage string
 	SslImage    string
 	DockerNet   string
+	// EngineIO — где живут рабочие файлы движков: "volume" (по умолчанию,
+	// docker-тома — не зависит от раскладки файлов на хосте) или "host"
+	// (каталоги SECSCAN_HOST_DATA, прежнее поведение).
+	EngineIO string
+	// TemplatesVolume — том с шаблонами nuclei (volume-режим).
+	TemplatesVolume string
+	// VolumePrefix — префикс имён томов задачи (volume-режим).
+	VolumePrefix string
 	// Crtsh — поиск соседних сайтов цели через crt.sh/certspotter
 	// (Certificate Transparency) + TLS-сертификаты; 0 — только nmap/ZAP
 	// по цели.
@@ -66,6 +74,11 @@ func loadConfig() Config {
 		NucleiImage: envOr("SECSCAN_NUCLEI_IMAGE", "projectdiscovery/nuclei:v2.9.14"),
 		SslImage:    envOr("SECSCAN_SSL_IMAGE", "drwetter/testssl.sh:latest"),
 		DockerNet:   envOr("SECSCAN_DOCKER_NETWORK", "host"),
+		// Файлы движков: по умолчанию docker-тома (работает на любом демоне,
+		// включая Docker Desktop/rootless/NAS, где хостовые пути недоступны).
+		EngineIO:        envOr("SECSCAN_ENGINE_IO", ioModeVolume),
+		TemplatesVolume: envOr("SECSCAN_TEMPLATES_VOLUME", "secscan-templates"),
+		VolumePrefix:    envOr("SECSCAN_VOLUME_PREFIX", "secscan-job-"),
 		Crtsh:       envOr("SECSCAN_CRTSH", "1") != "0",
 	}
 	if cfg.Pass == "" {
@@ -78,6 +91,9 @@ func loadConfig() Config {
 			abs = cfg.DataDir
 		}
 		cfg.HostDataDir = abs
+	}
+	if cfg.EngineIO != ioModeHost {
+		cfg.EngineIO = ioModeVolume
 	}
 	return cfg
 }
