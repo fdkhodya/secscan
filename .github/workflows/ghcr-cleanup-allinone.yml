@@ -1,0 +1,41 @@
+name: ghcr-cleanup-allinone
+
+# ВРЕМЕННЫЙ workflow (разовая чистка 15.09.2026): удаляет из GHCR версии образа
+# fdkhodya/secscan с тегами allinone* (allinone, allinone-openvas,
+# allinone-openvas-<sha>) — наследие удалённой фичи «всё в одном».
+# GITHUB_TOKEN с packages: write может удалять версии пакета этого репозитория.
+# Файл удаляется из main сразу после успешного прогона.
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List and delete allinone-tagged versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          API="https://api.github.com/user/packages/container/secscan/versions"
+          AUTH="Authorization: Bearer $GH_TOKEN"
+          ACC="Accept: application/vnd.github+json"
+          echo "== версии ДО:"
+          curl -s -H "$AUTH" -H "$ACC" "$API?per_page=100" > /tmp/v.json
+          jq -r '.[] | "\(.id)\t\((.metadata.container.tags // []) | join(","))"' /tmp/v.json
+          jq -r '.[] | select((.metadata.container.tags // []) | any(startswith("allinone"))) | .id' /tmp/v.json > /tmp/ids
+          echo "== найдено к удалению: $(wc -l < /tmp/ids)"
+          while read -r id; do
+            if [ -n "$id" ]; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "$AUTH" -H "$ACC" "$API/$id")
+              echo "deleted version_id=$id http=$code"
+            fi
+          done < /tmp/ids
+          echo "== версии ПОСЛЕ:"
+          curl -s -H "$AUTH" -H "$ACC" "$API?per_page=100" | jq -r '.[] | "\(.id)\t\((.metadata.container.tags // []) | join(","))"'
