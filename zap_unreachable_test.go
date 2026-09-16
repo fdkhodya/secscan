@@ -44,3 +44,31 @@ func TestZapTargetUnreachableError(t *testing.T) {
 		t.Fatal("пустое сообщение при отсутствии причины")
 	}
 }
+
+func TestZapStageMessage(t *testing.T) {
+	skips := []string{"http://46.146.247.228:80 (Connect timed out)"}
+	errs := []string{"https://example.org: zap: отчёт не создан: exit status 3"}
+	cases := []struct {
+		name  string
+		okN   int
+		skips []string
+		errs  []string
+		want  string
+	}{
+		{"все сайты проверены", 2, nil, nil, "zap: проверено сайтов: 2"},
+		{
+			"один сайт недоступен", 1, skips, nil,
+			"zap: проверено сайтов: 1; недоступны для сканера: 1 — http://46.146.247.228:80 (Connect timed out)",
+		},
+		{
+			"недоступен и ошибка", 1, skips, errs,
+			"zap: проверено сайтов: 1; недоступны для сканера: 1 — http://46.146.247.228:80 (Connect timed out); " +
+				"ошибки: https://example.org: zap: отчёт не создан: exit status 3",
+		},
+	}
+	for _, c := range cases {
+		if got := zapStageMessage(c.okN, c.skips, c.errs); got != c.want {
+			t.Errorf("%s: текст этапа = %q, ожидалось %q", c.name, got, c.want)
+		}
+	}
+}

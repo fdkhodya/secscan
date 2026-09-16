@@ -104,6 +104,20 @@ func (e *Engine) setStage(j *Job, key, st string) {
 	_ = e.store.SaveJob(j)
 }
 
+// zapStageMessage собирает текст этапа ZAP: сколько сайтов проверено, какие
+// оказались недоступны для сканера (порт открыт по данным nmap, но HTTP не
+// отвечает — это не сбой secscan) и какие ошибки были настоящими.
+func zapStageMessage(okN int, skips, errs []string) string {
+	msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
+	if len(skips) > 0 {
+		msg += fmt.Sprintf("; недоступны для сканера: %d — %s", len(skips), strings.Join(skips, "; "))
+	}
+	if len(errs) > 0 {
+		msg += "; ошибки: " + strings.Join(errs, "; ")
+	}
+	return truncate(msg, 1400)
+}
+
 func (e *Engine) run(id string) {
 	j, err := e.store.LoadJob(id)
 	if err != nil {
@@ -190,15 +204,11 @@ func (e *Engine) run(id string) {
 			okN++
 			_ = e.store.SaveJob(j)
 		}
-		msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
-		if len(zapSkips) > 0 {
-			msg += fmt.Sprintf("; недоступны для сканера: %d — %s", len(zapSkips), strings.Join(zapSkips, "; "))
-		}
+		msg := zapStageMessage(okN, zapSkips, zapErrs)
 		if len(zapErrs) > 0 {
-			msg += "; ошибки: " + strings.Join(zapErrs, "; ")
-			e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 1400))
+			e.set(j, "running", "zap: с ошибками", "этап zap: "+msg)
 		} else {
-			e.set(j, "running", truncate(msg, 1400), "")
+			e.set(j, "running", msg, "")
 		}
 		if okN == 0 && len(zapErrs) > 0 {
 			e.setStage(j, "zap", "error")
