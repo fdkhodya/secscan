@@ -472,6 +472,50 @@ type zapInstance struct {
 	Evidence string `json:"evidence"`
 }
 
+// zapTargetUnreachable — сайт не удалось открыть контейнеру ZAP: задание
+// spider в плане Automation Framework падает на подключении, план обрывается,
+// поэтому не создаются ни его summary-файл (~/zap_out.json), ни отчёт
+// (/zap/wrk/zap.json), а zap-baseline завершается кодом 3 (в stderr остаётся
+// только "Failed to access summary file /home/zap/zap_out.json").
+// Это НЕ сбой secscan: сканировать нечего — порт открыт по данным nmap, но
+// HTTP не отвечает (сервис за NAT отвечает не всем источникам, фильтрация,
+// обрыв сети у точки сканирования). Отдаём отдельный тип ошибки, чтобы этап
+// не выглядел красной ошибкой, а сайт был помечен как недоступный.
+type zapTargetUnreachable struct {
+	url    string
+	reason string
+}
+
+func (e *zapTargetUnreachable) Error() string {
+	if e.reason == "" {
+		return "сайт не отвечает для сканера (ZAP не смог подключиться)"
+	}
+	return "сайт не отвечает для сканера: " + e.reason
+}
+
+// zapAccessFailureReason вылавливает из stdout ZAP строку обрыва плана
+// Automation Framework и возвращает короткую причину:
+//
+//	Automation plan failures:
+//	  Job spider failed to access URL http://1.2.3.4 : Connect to http://1.2.3.4:80 [/1.2.3.4] failed: Connect timed out
+//	→ "Connect timed out"
+func zapAccessFailureReason(stdout string) (string, bool) {
+	const marker = "failed to access URL"
+	i := strings.Index(stdout, marker)
+	if i < 0 {
+		return "", false
+	}
+	line := stdout[i:]
+	if j := strings.IndexByte(line, '\n'); j >= 0 {
+		line = line[:j]
+	}
+	reason := line
+	if j := strings.LastIndex(line, "failed: "); j >= 0 {
+		reason = line[j+len("failed: "):]
+	}
+	return truncate(strings.TrimSpace(reason), 160), true
+}
+
 // zapScan запускает zap-baseline против одного URL.
 func zapScan(ctx context.Context, cfg *Config, jobID, targetURL string) ([]Finding, error) {
 	// Отчёт ZAP пишется в смонтированный рабочий каталог задачи (/zap/wrk):
@@ -494,13 +538,16 @@ func zapScan(ctx context.Context, cfg *Config, jobID, targetURL string) ([]Findi
 	stdout, errOut, err := runDocker(ctx, cfg.ZapImage, cfg.DockerNet, []string{mount}, args)
 	b, readErr := readArtifact(ctx, cfg, cfg.ZapImage, jobID, reportName, containerPath)
 	if readErr != nil {
+		// Сайт недоступен из контейнера сканера: план Automation Framework
+		// обрывается на задании spider и отчёта не будет — отдаём отдельный
+		// тип ошибки, чтобы этап не считался сбойным (см. zapTargetUnreachable).
+		if reason, unreachable := zapAccessFailureReason(stdout); unreachable {
+			return nil, &zapTargetUnreachable{url: targetURL, reason: reason}
+		}
 		// zap-baseline: rc=0 — PASS, rc=1 — найдены FAIL, rc=2 — найдены WARN:
 		// штатные завершения, отчёт при этом создаётся. Ошибка — только если
 		// отчёта нет (rc=3+: ZAP не стартовал и т.п.).
-		if err != nil {
-			return nil, fmt.Errorf("zap: %s (отчёт не получен: %v)", dockerFailure(err, stdout, errOut), readErr)
-		}
-		return nil, fmt.Errorf("zap: отчёт не создан: %w", readErr)
+		return nil, fmt.Errorf("zap: отчёт не создан: %s", dockerFailure(err, stdout, errOut))
 	}
 	var rep zapReport
 	if err := json.Unmarshal(b, &rep); err != nil {

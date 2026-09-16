@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -165,7 +166,7 @@ func (e *Engine) run(id string) {
 	webURLs = webTargetList(ctx, e.cfg, j, webPorts)
 	if len(webURLs) > 0 {
 		e.set(j, "running", fmt.Sprintf("zap: проверка сайтов — целей: %d", len(webURLs)), "")
-		okN, zapErrs := 0, []string{}
+		okN, zapErrs, zapSkips := 0, []string{}, []string{}
 		for i, u := range webURLs {
 			e.set(j, "running", fmt.Sprintf("zap: сайт %d/%d — %s", i+1, len(webURLs), u), "")
 			// у каждого сайта собственный бюджет; общий ctx не даёт
@@ -174,6 +175,14 @@ func (e *Engine) run(id string) {
 			findings, err := zapScan(uCtx, e.cfg, j.ID, u)
 			cancel()
 			if err != nil {
+				var unreachable *zapTargetUnreachable
+				if errors.As(err, &unreachable) {
+					// сайт не открывается из контейнера сканера: ZAP здесь не
+					// работает не из-за сбоя secscan — отмечаем пометкой,
+					// этап из-за этого не становится «error»
+					zapSkips = append(zapSkips, fmt.Sprintf("%s (%s)", u, unreachable.reason))
+					continue
+				}
 				zapErrs = append(zapErrs, u+": "+firstLine(err.Error()))
 				continue
 			}
@@ -182,11 +191,14 @@ func (e *Engine) run(id string) {
 			_ = e.store.SaveJob(j)
 		}
 		msg := fmt.Sprintf("zap: проверено сайтов: %d", okN)
+		if len(zapSkips) > 0 {
+			msg += fmt.Sprintf("; недоступны для сканера: %d — %s", len(zapSkips), strings.Join(zapSkips, "; "))
+		}
 		if len(zapErrs) > 0 {
-			msg = fmt.Sprintf("zap: ок %d из %d; ошибки: %s", okN, len(webURLs), strings.Join(zapErrs, "; "))
+			msg += "; ошибки: " + strings.Join(zapErrs, "; ")
 			e.set(j, "running", "zap: с ошибками", "этап zap: "+truncate(msg, 1400))
 		} else {
-			e.set(j, "running", msg, "")
+			e.set(j, "running", truncate(msg, 1400), "")
 		}
 		if okN == 0 && len(zapErrs) > 0 {
 			e.setStage(j, "zap", "error")

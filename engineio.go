@@ -143,9 +143,21 @@ func dockerFailure(err error, stdout, stderr string) string {
 		}
 	}
 	if reason == "" {
-		if t := collapseWS(stderr); t != "" {
-			reason = tail(t, 400)
-		} else if err != nil {
+		// Строки "docker: Error" нет — контейнер отработал и вернул ненулевой
+		// код. Суть такого сбоя печатает сам движок в stdout (например, ZAP
+		// Automation Framework: "Automation plan failures: Job spider failed
+		// to access URL … Connect timed out"), а в stderr идут только его
+		// предупреждения. Раньше stdout отбрасывался и в UI оставалось
+		// бесполезное "Failed to access summary file …" без причины.
+		var parts []string
+		if t := tail(collapseWS(stdout), 700); t != "" {
+			parts = append(parts, t)
+		}
+		if t := tail(collapseWS(stderr), 400); t != "" {
+			parts = append(parts, t)
+		}
+		reason = strings.Join(parts, " | ")
+		if reason == "" && err != nil {
 			reason = collapseWS(err.Error())
 		}
 	}
